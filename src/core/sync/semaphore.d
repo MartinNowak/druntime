@@ -241,6 +241,29 @@ class Semaphore
                     throw new SyncException( "Unable to wait for semaphore" );
             }
         }
+        else version( OpenBSD )
+        {
+            timespec t1 = void;
+            mktspec( t1, val );
+
+            while( true )
+            {
+                if( !sem_trywait( &m_hndl ) )
+                    return true;
+
+                timespec tin = void;
+                tin.tv_sec = 0;
+                tin.tv_nsec = 1;
+                nanosleep( &tin, null );
+
+                timespec t2 = void;
+                mktspec( t2 );
+
+                if ( ( t2.tv_sec >= t1.tv_sec ) ||
+                        ( t2.tv_sec == t1.tv_sec && t2.tv_nsec >= t1.tv_nsec ) )
+                    return false;
+            }
+        }
         else version( Posix )
         {
             timespec t = void;

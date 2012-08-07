@@ -14,7 +14,11 @@ ifeq (,$(OS))
             ifeq (FreeBSD,$(OS))
                 OS:=freebsd
             else
-                $(error Unrecognized or unsupported OS for uname: $(OS))
+				ifeq (OpenBSD,$(OS))
+					OS:=openbsd
+				else
+					$(error Unrecognized or unsupported OS for uname: $(OS))
+				endif
             endif
         endif
     endif
@@ -27,8 +31,10 @@ IMPDIR=import
 
 MODEL=32
 
-DFLAGS=-m$(MODEL) -O -release -inline -w -Isrc -Iimport -property
-UDFLAGS=-m$(MODEL) -O -release -w -Isrc -Iimport -property
+#XXX fix -O -release: DFLAGS=-m$(MODEL) -O -release -inline -w -Isrc -Iimport -property
+#XXX fix -O -release: UDFLAGS=-m$(MODEL) -O -release -w -Isrc -Iimport -property
+DFLAGS=-m$(MODEL) -release -inline -w -Isrc -Iimport -property
+UDFLAGS=-m$(MODEL) -release -w -Isrc -Iimport -property
 DDOCFLAGS=-m$(MODEL) -c -w -o- -Isrc -Iimport
 
 CFLAGS=-m$(MODEL) -O
@@ -98,6 +104,8 @@ MANIFEST= \
 	src/core/sys/freebsd/dlfcn.d \
 	src/core/sys/freebsd/execinfo.d \
 	src/core/sys/freebsd/sys/event.d \
+	\
+	src/core/sys/openbsd/sys/event.d \
 	\
 	src/core/sys/linux/execinfo.d \
 	\
@@ -285,6 +293,8 @@ SRC_D_MODULES = \
 	core/sys/freebsd/execinfo \
 	core/sys/freebsd/sys/event \
 	\
+	core/sys/openbsd/sys/event \
+	\
 	core/sys/posix/signal \
 	core/sys/posix/sys/select \
 	core/sys/posix/sys/socket \
@@ -460,6 +470,8 @@ COPY=\
 	$(IMPDIR)/core/sys/freebsd/execinfo.d \
 	$(IMPDIR)/core/sys/freebsd/sys/event.d \
 	\
+	$(IMPDIR)/core/sys/openbsd/sys/event.d \
+	\
 	$(IMPDIR)/core/sys/linux/execinfo.d \
 	\
 	$(IMPDIR)/core/sys/osx/execinfo.d \
@@ -526,6 +538,7 @@ COPYDIRS=\
 	$(IMPDIR)/core/sys/posix/netinet \
 	$(IMPDIR)/core/sys/osx/mach \
 	$(IMPDIR)/core/sys/freebsd/sys \
+	$(IMPDIR)/core/sys/openbsd/sys \
 
 ######################## Doc .html file generation ##############################
 
@@ -561,6 +574,7 @@ copydir:
 	-mkdir -p $(IMPDIR)/core/sys/posix/netinet
 	-mkdir -p $(IMPDIR)/core/sys/osx/mach
 	-mkdir -p $(IMPDIR)/core/sys/freebsd/sys
+	-mkdir -p $(IMPDIR)/core/sys/openbsd/sys
 	-mkdir -p $(IMPDIR)/core/sys/linux
 
 copy: $(COPY)

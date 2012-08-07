@@ -68,6 +68,12 @@ else version( FreeBSD )
 
     enum SEM_FAILED = cast(sem_t*) null;
 }
+else version( OpenBSD )
+{
+    alias void* sem_t;
+
+    enum SEM_FAILED = cast(sem_t*) null;
+}
 
 version( Posix )
 {

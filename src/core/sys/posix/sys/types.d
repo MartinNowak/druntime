@@ -98,6 +98,21 @@ else version( FreeBSD )
     alias uint      uid_t;
     alias uint      fflags_t;
 }
+else version( OpenBSD )
+{
+    alias char *    caddr_t;
+    alias uint      dev_t;
+    alias uint      gid_t;
+    alias uint      ino_t;
+    alias ushort    mode_t;
+    alias ushort    nlink_t;
+    alias long      off_t;
+    alias int       pid_t;
+    //size_t (defined in core.stdc.stddef)
+    alias c_long    ssize_t;
+    //time_t (defined in core.stdc.time)
+    alias uint      uid_t;
+}
 
 //
 // XOpen (XSI)
@@ -349,6 +364,19 @@ else version( FreeBSD )
 {
     alias int lwpid_t;
 
+    alias void* pthread_attr_t;
+    alias void* pthread_cond_t;
+    alias void* pthread_condattr_t;
+    alias void* pthread_key_t;
+    alias void* pthread_mutex_t;
+    alias void* pthread_mutexattr_t;
+    alias void* pthread_once_t;
+    alias void* pthread_rwlock_t;
+    alias void* pthread_rwlockattr_t;
+    alias void* pthread_t;
+}
+else version( OpenBSD )
+{
     alias void* pthread_attr_t;
     alias void* pthread_cond_t;
     alias void* pthread_condattr_t;

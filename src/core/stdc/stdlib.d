@@ -47,6 +47,7 @@ version(Windows)      enum RAND_MAX = 0x7fff;
 else version(linux)   enum RAND_MAX = 0x7fffffff;
 else version(OSX)     enum RAND_MAX = 0x7fffffff;
 else version(FreeBSD) enum RAND_MAX = 0x7fffffff;
+else version(OpenBSD) enum RAND_MAX = 0x7fffffff;
 else version(Solaris) enum RAND_MAX = 0x7fff;
 else static assert( false, "Unsupported platform" );
 

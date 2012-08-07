@@ -250,6 +250,12 @@ else version( Posix )
             extern (C) mach_port_t pthread_mach_thread_np(pthread_t);
         }
 
+        version( OpenBSD )
+        {
+            import core.sys.posix.signal;  // for stack_t
+        }
+
+
         version( GNU )
         {
             import gcc.builtins;
@@ -1093,6 +1099,8 @@ class Thread
     {
         version( Windows )
             SwitchToThread();
+        else version( OpenBSD )
+            pthread_yield();
         else version( Posix )
             sched_yield();
     }
@@ -2828,6 +2836,7 @@ extern (C)
 {
     version (linux) int pthread_getattr_np(pthread_t thread, pthread_attr_t* attr);
     version (FreeBSD) int pthread_attr_get_np(pthread_t thread, pthread_attr_t* attr);
+    version (OpenBSD) int pthread_stackseg_np(pthread_t thread, stack_t* stack);
 }
 
 
@@ -2880,6 +2889,12 @@ private void* getStackBottom()
         pthread_attr_getstack(&attr, &addr, &size);
         pthread_attr_destroy(&attr);
         return addr + size;
+    }
+    else version (OpenBSD)
+    {
+        stack_t stack;
+        pthread_stackseg_np(pthread_self(), &stack);
+        return stack.ss_sp;
     }
     else
         static assert(false, "Platform not supported.");

@@ -78,6 +78,19 @@ private
             }
         }
     }
+    else version( OpenBSD )
+    {
+        extern (C)
+        {
+            extern __gshared
+            {
+                size_t __data_start;
+                size_t _end;
+            }
+        }
+        alias __data_start  Data_Start;
+        alias _end          Data_End;
+    }
     else version( Solaris )
     {
         extern (C)
@@ -117,6 +130,10 @@ void initStaticDataGC()
         {
             gc_addRange( &etext, cast(size_t) &_end - cast(size_t) &etext );
         }
+    }
+    else version( OpenBSD )
+    {
+        gc_addRange( &__data_start, cast(size_t) &_end - cast(size_t) &__data_start );
     }
     else version( Solaris )
     {

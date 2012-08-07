@@ -112,6 +112,30 @@ else version( FreeBSD )
     extern (D) int  WSTOPSIG( int status )     { return status >> 8;                     }
     extern (D) int  WTERMSIG( int status )     { return _WSTATUS( status );              }
 }
+else version( OpenBSD )
+{
+    enum WNOHANG        = 1;
+    enum WUNTRACED      = 2;
+    enum WCONTINUED     = 8;
+
+    private
+    {
+        enum _WSTOPPED = 0x7F; // octal 0177
+        enum _WCONTINUED = 0xFFFF; // 0177777
+    }
+
+    extern (D) int _WSTATUS( int status )       { return (status & 0x7F);                       }
+    extern (D) int  WEXITSTATUS( int status )   { return (cast(uint)(status) >> 8) & 0xFF;      }
+    extern (D) int  WIFCONTINUED( int status )  { return (status & _WCONTINUED) == _WCONTINUED; }
+    extern (D) bool WIFEXITED( int status )     { return _WSTATUS(status) == 0;                 }
+    extern (D) bool WIFSIGNALED( int status )
+    {
+        return _WSTATUS( status ) != _WSTOPPED && _WSTATUS( status ) != 0;
+    }
+    extern (D) bool WIFSTOPPED( int status )   { return ( status & 0xFF ) == _WSTOPPED; }
+    extern (D) int  WSTOPSIG( int status )   { return (cast(uint)(status) >> 8) & 0xFF; }
+    extern (D) int  WTERMSIG( int status )     { return _WSTATUS( status );             }
+}
 
 version( Posix )
 {

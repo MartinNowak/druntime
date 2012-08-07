@@ -181,6 +181,30 @@ else version( FreeBSD )
     enum SIGUSR2    = 31;
     enum SIGURG     = 16;
 }
+else version( OpenBSD )
+{
+    //SIGABRT (defined in core.stdc.signal)
+    enum SIGALRM    = 14;
+    enum SIGBUS     = 10;
+    enum SIGCHLD    = 20;
+    enum SIGCONT    = 19;
+    //SIGFPE (defined in core.stdc.signal)
+    enum SIGHUP     = 1;
+    //SIGILL (defined in core.stdc.signal)
+    //SIGINT (defined in core.stdc.signal)
+    enum SIGKILL    = 9;
+    enum SIGPIPE    = 13;
+    enum SIGQUIT    = 3;
+    //SIGSEGV (defined in core.stdc.signal)
+    enum SIGSTOP    = 17;
+    //SIGTERM (defined in core.stdc.signal)
+    enum SIGTSTP    = 18;
+    enum SIGTTIN    = 21;
+    enum SIGTTOU    = 22;
+    enum SIGUSR1    = 30;
+    enum SIGUSR2    = 31;
+    enum SIGURG     = 16;
+}
 
 version( FreeBSD )
 {
@@ -511,6 +535,78 @@ else version( FreeBSD )
         __reason _reason;
 
         @property ref c_long si_band() { return _reason._poll._band; }
+    }
+
+    int kill(pid_t, int);
+    int sigaction(int, in sigaction_t*, sigaction_t*);
+    int sigaddset(sigset_t*, int);
+    int sigdelset(sigset_t*, int);
+    int sigemptyset(sigset_t *);
+    int sigfillset(sigset_t *);
+    int sigismember(in sigset_t *, int);
+    int sigpending(sigset_t *);
+    int sigprocmask(int, in sigset_t*, sigset_t*);
+    int sigsuspend(in sigset_t *);
+    int sigwait(in sigset_t*, int*);
+}
+else version( OpenBSD )
+{
+    struct sigset_t
+    {
+        uint __bits[4];
+    }
+
+    private enum SI_MAXSZ = 128;
+    private enum SI_PAD = ((SI_MAXSZ / int.sizeof) - 3);
+
+    struct siginfo_t
+    {
+        int si_signo;
+        int si_code;
+        int si_errno;
+        union __data
+        {
+            int _pad[SI_PAD];
+            struct __proc
+            {
+                pid_t _pid;
+                union __pdata
+                {
+                    struct __kill
+                    {
+                        uid_t _uid;
+                        sigval _value;
+                    }
+                    __kill _kill;
+                    struct __cld
+                    {
+                        clock_t _utime;
+                        int _status;
+                        clock_t _stime;
+                    }
+                    __cld _cld;
+                }
+                __pdata _pdata;
+            }
+            __proc _proc;
+            struct __fault
+            {
+                caddr_t _addr;
+                int _trapno;
+            }
+            __fault _fault;
+        }
+        __data _data;
+
+        @property ref pid_t si_pid() { return _data._proc._pid; }
+
+        @property ref int si_status() { return _data._proc._pdata._cld._status; }
+        @property ref clock_t si_stime() { return _data._proc._pdata._cld._stime; }
+        @property ref clock_t si_utime() { return _data._proc._pdata._cld._utime; }
+        @property ref uid_t si_uid() { return _data._proc._pdata._kill._uid; }
+        @property ref sigval si_value() { return _data._proc._pdata._kill._value; }
+        @property ref caddr_t si_addr() { return _data._fault._addr; }
+        @property ref int si_trapno() { return _data._fault._trapno; }
     }
 
     int kill(pid_t, int);
@@ -955,6 +1051,103 @@ else version( FreeBSD )
     int sigpause(int);
     int sigrelse(int);
 }
+else version( OpenBSD )
+{
+    // No SIGPOLL on *BSD
+    enum SIGPROF        = 27;
+    enum SIGSYS         = 12;
+    enum SIGTRAP        = 5;
+    enum SIGVTALRM      = 26;
+    enum SIGXCPU        = 24;
+    enum SIGXFSZ        = 25;
+
+    enum
+    {
+        SA_ONSTACK      = 0x0001,
+        SA_RESTART      = 0x0002,
+        SA_RESETHAND    = 0x0004,
+        SA_NODEFER      = 0x0010,
+        SA_NOCLDWAIT    = 0x0020,
+        SA_SIGINFO      = 0x0040,
+    }
+
+    enum
+    {
+        SS_ONSTACK = 0x0001,
+        SS_DISABLE = 0x0004,
+    }
+
+    enum MINSIGSTKSZ = 8192;
+    enum SIGSTKSZ    = (MINSIGSTKSZ + 32768);
+;
+    //ucontext_t (defined in core.sys.posix.ucontext)
+    //mcontext_t (defined in core.sys.posix.ucontext)
+
+    struct stack_t
+    {
+        void*   ss_sp;
+        size_t  ss_size;
+        int     ss_flags;
+    }
+
+    enum
+    {
+        ILL_ILLOPC = 1,
+        ILL_ILLOPN,
+        ILL_ILLADR,
+        ILL_ILLTRP,
+        ILL_PRVOPC,
+        ILL_PRVREG,
+        ILL_COPROC,
+        ILL_BADSTK,
+    }
+
+    enum
+    {
+        BUS_ADRALN = 1,
+        BUS_ADRERR,
+        BUS_OBJERR,
+    }
+
+    enum
+    {
+        SEGV_MAPERR = 1,
+        SEGV_ACCERR,
+    }
+
+    enum
+    {
+        FPE_INTDIV = 1,
+        FPE_INTOVF,
+        FPE_FLTDIV,
+        FPE_FLTOVF,
+        FPE_FLTUND,
+        FPE_FLTRES,
+        FPE_FLTINV,
+        FPE_FLTSUB,
+    }
+
+    enum
+    {
+        TRAP_BRKPT = 1,
+        TRAP_TRACE,
+    }
+
+    enum
+    {
+        CLD_EXITED = 1,
+        CLD_KILLED,
+        CLD_DUMPED,
+        CLD_TRAPPED,
+        CLD_STOPPED,
+        CLD_CONTINUED,
+    }
+
+    int killpg(pid_t, int);
+    int sigaltstack(in stack_t*, stack_t*);
+    int siginterrupt(int, int);
+    int sigpause(int);
+}
 
 //
 // Timer (TMR)
@@ -987,6 +1180,14 @@ else version( OSX )
     }
 }
 else version( FreeBSD )
+{
+    struct timespec
+    {
+        time_t  tv_sec;
+        c_long  tv_nsec;
+    }
+}
+else version( OpenBSD )
 {
     struct timespec
     {
@@ -1091,6 +1292,11 @@ else version( OSX )
     int pthread_sigmask(int, in sigset_t*, sigset_t*);
 }
 else version( FreeBSD )
+{
+    int pthread_kill(pthread_t, int);
+    int pthread_sigmask(int, in sigset_t*, sigset_t*);
+}
+else version( OpenBSD )
 {
     int pthread_kill(pthread_t, int);
     int pthread_sigmask(int, in sigset_t*, sigset_t*);

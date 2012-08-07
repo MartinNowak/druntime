@@ -118,6 +118,13 @@ else version( FreeBSD )
 
     void* valloc(size_t); // LEGACY non-standard
 }
+else version( OpenBSD )
+{
+    int setenv(in char*, in char*, int);
+    int unsetenv(in char*);
+
+    void* valloc(size_t); // LEGACY non-standard
+}
 
 //
 // Thread-Safe Functions (TSF)

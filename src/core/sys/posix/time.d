@@ -91,6 +91,10 @@ else version (FreeBSD)
     enum CLOCK_MONOTONIC_PRECISE = 11;
     enum CLOCK_MONOTONIC_FAST    = 12;
 }
+else version (OpenBSD)
+{   // time.h
+    enum CLOCK_MONOTONIC         = 3;
+}
 else version (OSX)
 {
     // No CLOCK_MONOTONIC defined
@@ -217,6 +221,33 @@ else version( FreeBSD )
     int timer_gettime(timer_t, itimerspec*);
     int timer_getoverrun(timer_t);
     int timer_settime(timer_t, int, in itimerspec*, itimerspec*);
+}
+else version( OpenBSD )
+{
+    // NOTE: See above for why this is commented out.
+    //
+    //struct timespec
+    //{
+    //    time_t  tv_sec;
+    //    c_long  tv_nsec;
+    //}
+
+    struct itimerspec
+    {
+        timespec it_interval;
+        timespec it_value;
+    }
+
+    enum CLOCK_REALTIME     = 0;
+    enum TIMER_ABSTIME      = 0x01;
+
+    alias int clockid_t; // <sys/_types.h>
+    alias int timer_t;
+
+    int clock_getres(clockid_t, timespec*);
+    int clock_gettime(clockid_t, timespec*);
+    int clock_settime(clockid_t, in timespec*);
+    int nanosleep(in timespec*, timespec*);
 }
 
 

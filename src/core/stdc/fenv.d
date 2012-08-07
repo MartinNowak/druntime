@@ -84,6 +84,22 @@ else version ( FreeBSD )
 
     alias ushort fexcept_t;
 }
+else version ( OpenBSD )
+{
+    struct fenv_t
+    {
+        struct ___x87 {
+            ushort __control;
+            ushort __status;
+            uint __tag;
+            uint[4] __other;
+        }
+        ___x87 __x87;
+        uint __mxcsr;
+    }
+
+    alias uint fexcept_t;
+}
 else
 {
     static assert( false, "Unsupported platform" );

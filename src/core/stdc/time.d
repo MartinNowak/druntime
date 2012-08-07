@@ -108,3 +108,8 @@ else version( FreeBSD )
     void tzset();                            // non-standard
     extern __gshared const(char)*[2] tzname; // non-standard
 }
+else version( OpenBSD )
+{
+    void tzset();                            // non-standard
+    extern __gshared const(char)*[2] tzname; // non-standard
+}

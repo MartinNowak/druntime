@@ -217,6 +217,45 @@ else version( FreeBSD )
     int pselect(int, fd_set*, fd_set*, fd_set*, in timespec*, in sigset_t*);
     int select(int, fd_set*, fd_set*, fd_set*, timeval*);
 }
+else version( OpenBSD )
+{
+    private import core.stdc.string;
+
+    private
+    {
+        alias c_ulong __fd_mask;
+        enum _NFDBITS = __fd_mask.sizeof * 8;
+    }
+
+    enum uint FD_SETSIZE = 1024;
+
+    struct fd_set
+    {
+        __fd_mask __fds_bits[(FD_SETSIZE + (_NFDBITS - 1)) / _NFDBITS];
+    }
+
+    extern (D) void FD_CLR( int n, fd_set* p )
+    {
+        p.__fds_bits[n / _NFDBITS] &= ~(1 << (n % _NFDBITS));
+    }
+
+    extern (D) bool FD_ISSET( int n, const(fd_set)* p )
+    {
+        return (p.__fds_bits[n / _NFDBITS] & (1 << (n % _NFDBITS))) != 0;
+    }
+
+    extern (D) void FD_SET( int n, fd_set* p )
+    {
+        p.__fds_bits[n / _NFDBITS] |= (1 << (n % _NFDBITS));
+    }
+
+    extern (D) void FD_ZERO( fd_set* p )
+    {
+        memset(p, 0, (*p).sizeof);
+    }
+
+    int select(int, fd_set*, fd_set*, fd_set*, timeval*);
+}
 
 unittest
 {

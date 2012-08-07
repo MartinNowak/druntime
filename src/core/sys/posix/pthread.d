@@ -210,6 +210,44 @@ else version( FreeBSD )
     enum PTHREAD_COND_INITIALIZER               = null;
     enum PTHREAD_RWLOCK_INITIALIZER             = null;
 }
+else version( OpenBSD )
+{
+    enum
+    {
+        PTHREAD_DETACHED            = 0x1,
+        PTHREAD_INHERIT_SCHED       = 0x4,
+        PTHREAD_NOFLOAT             = 0x8,
+
+        PTHREAD_CREATE_DETACHED     = PTHREAD_DETACHED,
+        PTHREAD_CREATE_JOINABLE     = 0,
+        PTHREAD_EXPLICIT_SCHED      = 0,
+    }
+
+    enum
+    {
+        PTHREAD_PROCESS_PRIVATE     = 0,
+        PTHREAD_PROCESS_SHARED      = 1,
+    }
+
+    enum
+    {
+        PTHREAD_CANCEL_ENABLE       = 0,
+        PTHREAD_CANCEL_DISABLE      = 1,
+        PTHREAD_CANCEL_DEFERRED     = 0,
+        PTHREAD_CANCEL_ASYNCHRONOUS = 2,
+    }
+
+    enum PTHREAD_CANCELED = cast(void*) -1;
+
+    enum PTHREAD_NEEDS_INIT = 0;
+    enum PTHREAD_DONE_INIT  = 1;
+
+    //enum pthread_once_t PTHREAD_ONCE_INIT = { PTHREAD_NEEDS_INIT, null };
+
+    enum PTHREAD_MUTEX_INITIALIZER              = null;
+    enum PTHREAD_COND_INITIALIZER               = null;
+    enum PTHREAD_RWLOCK_INITIALIZER             = null;
+}
 
 version( Posix )
 {
@@ -503,6 +541,24 @@ else version( FreeBSD )
     int pthread_mutexattr_settype(pthread_mutexattr_t*, int);
     int pthread_setconcurrency(int);
 }
+else version( OpenBSD )
+{
+    enum
+    {
+        PTHREAD_MUTEX_ERRORCHECK    = 1,
+        PTHREAD_MUTEX_RECURSIVE     = 2,
+        PTHREAD_MUTEX_NORMAL        = 3,
+        PTHREAD_MUTEX_TYPE_MAX
+    }
+    enum PTHREAD_MUTEX_DEFAULT = PTHREAD_MUTEX_ERRORCHECK;
+
+    int pthread_attr_getguardsize(in pthread_attr_t*, size_t*);
+    int pthread_attr_setguardsize(pthread_attr_t*, size_t);
+    int pthread_getconcurrency();
+    int pthread_mutexattr_gettype(pthread_mutexattr_t*, int*);
+    int pthread_mutexattr_settype(pthread_mutexattr_t*, int);
+    int pthread_setconcurrency(int);
+}
 
 //
 // CPU Time (TCT)
@@ -652,6 +708,25 @@ else version( FreeBSD )
     int pthread_setschedparam(pthread_t, int, sched_param*);
     //int pthread_setschedprio(pthread_t, int);
 }
+else version( OpenBSD )
+{
+    enum
+    {
+        PTHREAD_SCOPE_PROCESS   = 0,
+        PTHREAD_SCOPE_SYSTEM    = 0x2
+    }
+
+    int pthread_attr_getinheritsched(in pthread_attr_t*, int*);
+    int pthread_attr_getschedpolicy(in pthread_attr_t*, int*);
+    int pthread_attr_getscope(in pthread_attr_t*, int*);
+    int pthread_attr_setinheritsched(pthread_attr_t*, int);
+    int pthread_attr_setschedpolicy(pthread_attr_t*, int);
+    int pthread_attr_setscope(in pthread_attr_t*, int);
+    int pthread_getschedparam(pthread_t, int*, sched_param*);
+    int pthread_setschedparam(pthread_t, int, sched_param*);
+
+    void pthread_yield();
+}
 
 //
 // Stack (TSA|TSS)
@@ -684,6 +759,15 @@ else version( OSX )
     int pthread_attr_setstacksize(pthread_attr_t*, size_t);
 }
 else version( FreeBSD )
+{
+    int pthread_attr_getstack(in pthread_attr_t*, void**, size_t*);
+    int pthread_attr_getstackaddr(in pthread_attr_t*, void**);
+    int pthread_attr_getstacksize(in pthread_attr_t*, size_t*);
+    int pthread_attr_setstack(pthread_attr_t*, void*, size_t);
+    int pthread_attr_setstackaddr(pthread_attr_t*, void*);
+    int pthread_attr_setstacksize(pthread_attr_t*, size_t);
+}
+else version( OpenBSD )
 {
     int pthread_attr_getstack(in pthread_attr_t*, void**, size_t*);
     int pthread_attr_getstackaddr(in pthread_attr_t*, void**);

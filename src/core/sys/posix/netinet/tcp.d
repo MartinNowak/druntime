@@ -37,3 +37,7 @@ else version( FreeBSD )
 {
     enum TCP_NODELAY = 1;
 }
+else version( OpenBSD )
+{
+    enum TCP_NODELAY = 1;
+}

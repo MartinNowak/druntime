@@ -26,6 +26,10 @@ private
     {
         version = USE_PTHREADS;
     }
+    else version( OpenBSD )
+    {
+        version = USE_PTHREADS;
+    }
     else version( OSX )
     {
         version = USE_PTHREADS;
