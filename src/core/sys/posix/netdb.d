@@ -447,8 +447,7 @@ else version( OpenBSD )
     enum AI_EXT             = 0x8;
     enum AI_NUMERICSERV     = 0x10;
     enum AI_FQDN            = 0x20;
-
-    @property int AI_MASK() { return AI_PASSIVE | AI_CANONNAME | AI_NUMERICHOST | AI_NUMERICSERV | AI_FQDN; }
+    enum AI_MASK = AI_PASSIVE | AI_CANONNAME | AI_NUMERICHOST | AI_NUMERICSERV | AI_FQDN;
 
     enum NI_NUMERICHOST     = 0x1;
     enum NI_NUMERICSERV     = 0x2;
