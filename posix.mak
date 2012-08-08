@@ -31,10 +31,8 @@ IMPDIR=import
 
 MODEL=32
 
-#XXX fix -O -release: DFLAGS=-m$(MODEL) -O -release -inline -w -Isrc -Iimport -property
-#XXX fix -O -release: UDFLAGS=-m$(MODEL) -O -release -w -Isrc -Iimport -property
-DFLAGS=-m$(MODEL) -release -inline -w -Isrc -Iimport -property
-UDFLAGS=-m$(MODEL) -release -w -Isrc -Iimport -property
+DFLAGS=-m$(MODEL) -O -release -inline -w -Isrc -Iimport -property
+UDFLAGS=-m$(MODEL) -O -release -w -Isrc -Iimport -property
 DDOCFLAGS=-m$(MODEL) -c -w -o- -Isrc -Iimport
 
 CFLAGS=-m$(MODEL) -O
