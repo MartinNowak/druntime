@@ -3,24 +3,24 @@
 #    pkg_add -r gmake
 # and then run as gmake rather than make.
 
-ifeq (,$(OS))
-    OS:=$(shell uname)
-    ifeq (Darwin,$(OS))
-        OS:=osx
-    else
-        ifeq (Linux,$(OS))
-            OS:=linux
-        else
-            ifeq (FreeBSD,$(OS))
-                OS:=freebsd
-            else
-				ifeq (OpenBSD,$(OS))
-					OS:=openbsd
-				else
-					$(error Unrecognized or unsupported OS for uname: $(OS))
-				endif
-            endif
-        endif
+ifeq ($(OS),)
+    uname_S:=$(shell uname -s)
+
+    ifeq ($(uname_S),Darwin)
+         OS:=osx
+    endif
+    ifeq ($(uname_S),Linux)
+        OS:=linux
+    endif
+    ifeq ($(uname_S),FreeBSD)
+        OS:=freebsd
+    endif
+    ifeq ($(uname_S),OpenBSD)
+        OS:=openbsd
+    endif
+
+    ifeq ($(OS),)
+        $(error Unrecognized or unsupported OS for uname: $(uname_S))
     endif
 endif
 
