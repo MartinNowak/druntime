@@ -253,7 +253,7 @@ class Semaphore
 
                 timespec tin = void;
                 tin.tv_sec = 0;
-                tin.tv_nsec = 1;
+                tin.tv_nsec = 100;
                 nanosleep( &tin, null );
 
                 timespec t2 = void;
