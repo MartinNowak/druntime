@@ -89,8 +89,8 @@ else version ( OpenBSD )
     struct fenv_t
     {
         struct ___x87 {
-            ushort __control;
-            ushort __status;
+            uint __control;
+            uint __status;
             uint __tag;
             uint[4] __other;
         }
