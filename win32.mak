@@ -78,6 +78,8 @@ MANIFEST= \
 	src\core\sys\freebsd\execinfo.d \
 	src\core\sys\freebsd\sys\event.d \
 	\
+	src\core\sys\openbsd\sys\event.d \
+	\
 	src\core\sys\linux\execinfo.d \
 	\
 	src\core\sys\osx\execinfo.d \
@@ -433,6 +435,8 @@ COPY=\
 	$(IMPDIR)\core\sys\freebsd\execinfo.d \
 	$(IMPDIR)\core\sys\freebsd\sys\event.d \
 	\
+	$(IMPDIR)\core\sys\openbsd\sys\event.d \
+	\
 	$(IMPDIR)\core\sys\linux\execinfo.d \
 	\
 	$(IMPDIR)\core\sys\osx\execinfo.d \
@@ -701,6 +705,9 @@ $(IMPDIR)\core\sys\freebsd\execinfo.d : src\core\sys\freebsd\execinfo.d
 	copy $** $@
 
 $(IMPDIR)\core\sys\freebsd\sys\event.d : src\core\sys\freebsd\sys\event.d
+	copy $** $@
+
+$(IMPDIR)\core\sys\openbsd\sys\event.d : src\core\sys\openbsd\sys\event.d
 	copy $** $@
 
 $(IMPDIR)\core\sys\linux\execinfo.d : src\core\sys\linux\execinfo.d
