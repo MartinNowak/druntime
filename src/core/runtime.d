@@ -1026,3 +1026,85 @@ Throwable.TraceInfo defaultTraceHandler( void* ptr = null )
         return null;
     }
 }
+
+
+
+version(linux)
+{
+    import core.sys.linux.elf;
+    import core.stdc.stdio;
+    import core.stdc.stdlib;
+    
+    ///Checks if file is a library
+    bool isLibrary(const(char)[] fileName)
+    {
+        if (fileName[$-1] != '\0')
+            fileName ~= '\0';
+        const(char)* ptr = fileName.ptr;
+        FILE* file = fopen(ptr, "r");
+        if (!file)
+        {
+            debug printf("can't open file\n");
+            return false;
+        }
+        scope(exit)
+        {
+            if (file)
+                fclose(file);
+        }
+        
+        char elfIdent[EI_NIDENT];
+        fread(elfIdent.ptr, char.sizeof, elfIdent.length, file);
+        if (ferror(file) || feof(file))
+        {
+            debug printf("error while reading ident\n");
+            return false;
+        }
+        
+        if (elfIdent[0..4] != [0x7f, 'E', 'L', 'F'])
+        {
+            debug printf("invalid elf magic\n");
+            return false;
+        }
+        
+        void* headerPtr;
+        scope(exit)
+        {
+            if (headerPtr)
+                free(headerPtr);
+        }
+        
+        fseek(file, 0, SEEK_SET);
+        switch(elfIdent[EI_CLASS])
+        {
+            case ELFCLASS32:
+                headerPtr = malloc(Elf32_Ehdr.sizeof);
+                fread(headerPtr, Elf32_Ehdr.sizeof, 1, file);
+                if (ferror(file) || feof(file))
+                {
+                    debug printf("error while reading header\n");
+                    return false;
+                }
+                auto eheader = cast(Elf32_Ehdr*)headerPtr;
+                if (eheader.e_type == ET_DYN)
+                    return true;
+                break;
+            case ELFCLASS64:
+                headerPtr = malloc(Elf64_Ehdr.sizeof);
+                fread(headerPtr, Elf64_Ehdr.sizeof, 1, file);
+                if (ferror(file) || feof(file))
+                {
+                    debug printf("error while reading header\n");
+                    return false;
+                }
+                auto eheader = cast(Elf64_Ehdr*)headerPtr;
+                if (eheader.e_type == ET_DYN)
+                    return true;
+                break;
+            default:
+                debug printf("unknown class\n");
+                return false;
+        }
+        return false;
+    }
+}
