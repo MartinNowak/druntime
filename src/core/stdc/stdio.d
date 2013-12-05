@@ -188,6 +188,8 @@ version( Win32 )
         int   _bufsiz;
         char* __tmpnum;
     }
+
+    alias FILE = shared(_iobuf);
 }
 else version( Win64 )
 {
@@ -202,6 +204,8 @@ else version( Win64 )
         int   _bufsiz;
         char* _tmpfname;
     }
+
+    alias FILE = shared(_iobuf);
 }
 else version( linux )
 {
@@ -229,6 +233,8 @@ else version( linux )
         char[1] _shortbuf;
         void*   _lock;
     }
+
+    alias FILE = shared(_iobuf);
 }
 else version( OSX )
 {
@@ -259,6 +265,8 @@ else version( OSX )
         int       _blksize;
         fpos_t    _offset;
     }
+
+    alias FILE = shared(_iobuf);
 }
 else version( FreeBSD )
 {
@@ -296,6 +304,8 @@ else version( FreeBSD )
         int             _orientation;
         __mbstate_t     _mbstate;
     }
+
+    alias FILE = shared(_iobuf);
 }
 else version (Solaris)
 {
@@ -313,10 +323,12 @@ else version (Solaris)
                         // __xf_nocheck:1
                         // __filler:10
     }
+
+    alias FILE = shared(_iobuf);
 }
 else version( Android )
 {
-    align(1) struct _iobuf
+    struct __sFFILE
     {
         ubyte*    _p;
         int       _r;
@@ -327,10 +339,10 @@ else version( Android )
         int       _lbfsize;
 
         void*     _cookie;
-        int*      function(void*)                    _close;
-        int*      function(void*, char*, int)        _read;
-        fpos_t*   function(void*, fpos_t, int)       _seek;
-        int*      function(void*, in char*, int)     _write;
+        int       function(void*)                    _close;
+        int       function(void*, char*, int)        _read;
+        fpos_t    function(void*, fpos_t, int)       _seek;
+        int       function(void*, in char*, int)     _write;
 
         __sbuf    _ext;
         ubyte*    _up;
@@ -344,14 +356,13 @@ else version( Android )
         int       _blksize;
         fpos_t    _offset;
     }
+
+    alias FILE = shared(__sFILE);
 }
 else
 {
     static assert( false, "Unsupported platform" );
 }
-
-
-alias shared(_iobuf) FILE;
 
 enum
 {
