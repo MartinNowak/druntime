@@ -30,6 +30,9 @@ private
 
     alias rt_tlsgc_processGCMarks =
         externDFunc!("rt.tlsgc.processGCMarks", void function(void*, scope IsMarkedDg) nothrow);
+
+    alias printThrowable =
+        externDFunc!("rt.dmain2.printThrowable", void function(Throwable));
 }
 
 version( Solaris )
@@ -213,6 +216,7 @@ version( Windows )
                 asm nothrow @nogc { fninit; }
             }
 
+            bool exit;
             try
             {
                 rt_moduleTlsCtor();
@@ -220,16 +224,27 @@ version( Windows )
                 {
                     obj.run();
                 }
+                catch( Exception e )
+                {
+                    append( e );
+                }
                 catch( Throwable t )
                 {
-                    append( t );
+                    printThrowable(t);
+                    exit = true;
                 }
                 rt_moduleTlsDtor();
             }
+            catch( Exception e )
+            {
+                append( e );
+            }
             catch( Throwable t )
             {
-                append( t );
+                printThrowable(t);
+                exit = true;
             }
+            if (exit) exit(EXIT_FAILURE);
             return 0;
         }
 
@@ -348,16 +363,16 @@ else version( Posix )
             //       alloca) forOutOfMemoryError plus something to track
             //       whether an exception is in-flight?
 
-            void append( Throwable t )
+            void append( Exception e )
             {
                 if( obj.m_unhandled is null )
-                    obj.m_unhandled = t;
+                    obj.m_unhandled = e;
                 else
                 {
                     Throwable last = obj.m_unhandled;
                     while( last.next !is null )
                         last = last.next;
-                    last.next = t;
+                    last.next = e;
                 }
             }
 
@@ -369,16 +384,23 @@ else version( Posix )
                 {
                     obj.run();
                 }
-                catch( Throwable t )
+                catch( Exception e )
                 {
-                    append( t );
+                    append( e );
                 }
                 rt_moduleTlsDtor();
                 version (Shared) cleanupLoadedLibraries();
             }
+            catch( Exception e )
+            {
+                append( e );
+            }
             catch( Throwable t )
             {
-                append( t );
+                import core.stdc.stdio;
+                fprintf(stderr, "Throwable\n");
+                //printThrowable(t);
+                exit(EXIT_FAILURE);
             }
 
             // NOTE: Normal cleanup is handled by scope(exit).
@@ -1395,7 +1417,7 @@ private:
     }
     bool                m_isDaemon;
     bool                m_isInCriticalRegion;
-    Throwable           m_unhandled;
+    Exception           m_unhandled;
 
     version( Solaris )
     {

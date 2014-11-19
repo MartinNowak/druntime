@@ -8,7 +8,7 @@ QUIET:=
 
 SRC:=src
 ROOT:=./obj/$(OS)/$(MODEL)
-TESTS:=stderr_msg unittest_assert
+TESTS:=stderr_msg unittest_assert thread_exit
 
 ifneq (default,$(MODEL))
 	MODEL_FLAG:=-m$(MODEL)
@@ -32,6 +32,11 @@ $(ROOT)/stderr_msg.done: $(ROOT)/stderr_msg
 $(ROOT)/unittest_assert.done: $(ROOT)/unittest_assert
 	@echo Testing unittest_assert
 	$(QUIET)./$(ROOT)/unittest_assert $(RUN_ARGS) 2>&1 1>/dev/null | grep -qF "unittest_assert msg"
+	@touch $@
+
+$(ROOT)/thread_exit.done: $(ROOT)/thread_exit
+	@echo Testing thread_exit
+	$(QUIET)./$(ROOT)/thread_exit $(RUN_ARGS) 2>&1 1>/dev/null # | grep -qF "unittest_assert msg"
 	@touch $@
 
 $(ROOT)/unittest_assert: DFLAGS+=-unittest

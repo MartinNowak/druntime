@@ -458,7 +458,7 @@ private void formatThrowable(Throwable t, void delegate(in char[] s) nothrow sin
     }
 }
 
-private void printThrowable(Throwable t)
+void printThrowable(Throwable t)
 {
     // On Windows, a console may not be present to print the output to.
     // Show a message box instead.
