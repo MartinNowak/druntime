@@ -1118,8 +1118,7 @@ extern (D) alias int delegate(void *) dg_t;
 extern (D) alias int delegate(void *, void *) dg2_t;
 extern (D) alias AssociativeArrayHandle** function(void[],  void[]) init_t;
 
-//!Note: this functions are extern(D) now and doesn't conflict with rt.aaA _aaXXX functions
-extern(D)
+extern(C)
 {
     size_t _aaLen(in AssociativeArrayHandle** aa) @trusted pure nothrow
     {

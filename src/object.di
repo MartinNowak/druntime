@@ -383,19 +383,12 @@ extern (C)
     void* _aaRangeFrontKey(AARange r) pure nothrow @nogc;
     void* _aaRangeFrontValue(AARange r) pure nothrow @nogc;
     void _aaRangePopFront(ref AARange r) pure nothrow @nogc;
-
-    /*
-        _d_assocarrayliteralTX marked as pure, because aaLiteral can be called from pure code.
-        This is a typesystem hole, however this is existing hole.
-        Early compiler didn't check purity of toHash or postblit functions, if key is a UDT thus
-        copiler allowed to create AA literal with keys, which have impure unsafe toHash methods.
-    */
-    void* _d_assocarrayliteralTX(const TypeInfo_AssociativeArray ti, void[] keys, void[] values) pure;
 }
 
-void* aaLiteral(Key, Value)(Key[] keys, Value[] values) @trusted pure
+auto aaLiteral(Key, Value)(Key[] keys, Value[] values)
 {
-    return _d_assocarrayliteralTX(typeid(Value[Key]), *cast(void[]*)&keys, *cast(void[]*)&values);
+    import core.internal.aa : aaLiteral;
+    return aaLiteral!(Key, Value)(keys, values);
 }
 
 alias AssociativeArray(Key, Value) = Value[Key];
