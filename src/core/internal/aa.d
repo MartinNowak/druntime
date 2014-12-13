@@ -110,15 +110,14 @@ struct AssociativeArray(Key, Value)
 
     ref Value opIndexAssign()(auto ref Value value, in auto ref Key key)
     {
-        if (!impl)
-        {
-            impl = newImpl();
-        }
+        if (impl is null) impl = newImpl();
 
-        auto v = getLValue(key);
-        assert(v);
-        v.setValue(value);
-
+        bool isNew; // should add a setLValue function, instead of using the bool
+        auto v = getLValue(key, isNew);
+        if (isNew)
+            _emplace!true(v.value, value);
+        else
+            v.setValue(value);
         return v.value;
     }
 
@@ -547,6 +546,12 @@ private:
 
     Entry* getLValue(ref const(Unqual!Key) pkey)
     {
+        bool dummy;
+        return getLValue(pkey, dummy);
+    }
+
+    Entry* getLValue(ref const(Unqual!Key) pkey, out bool isNew)
+    {
         assert(impl);
 
         auto key_hash = hashOf(pkey);
@@ -566,7 +571,7 @@ private:
 
         if (i < impl.firstbucket)
             impl.firstbucket = i;
-        e = new Entry(key_hash, pkey);
+        e = new Entry(key_hash, pkey); // TODO: avoid to initialize e.value
         e.next = pe;
         impl.buckets[i] = e;
 
@@ -577,6 +582,7 @@ private:
             rehash();
         }
 
+        isNew = true;
         return e;
     }
 
@@ -1599,6 +1605,25 @@ version(unittest)
         return 0;
     }
 
+    bool test6()
+    {
+        static struct NC
+        {
+            @disable this(this);
+        }
+
+        AssociativeArray!(int, NC) aa;
+        aa[0] = NC();
+        aa[1] = NC();
+        bool thrown;
+        try
+            aa[0] = NC(); // new behavior!!!, throws
+        catch (RangeError r)
+            thrown = true;
+        assert(thrown);
+        return true;
+    }
+
     unittest
     {
         auto runtime1 = test1!false();
@@ -1611,29 +1636,35 @@ version(unittest)
         auto runtime4_1 = test4!(true)();
         enum compiletime4 = test4!(false)();
         auto runtime5 = test5();
+        // TODO: _emplace can't be interpreted
+        // enum compiletime6 = test6();
+        auto runtime6 = test6();
     }
 }
 
-private void _emplace(bool new_obj, V1, V2)(ref V1 dst, ref V2 src) @trusted if (is(V1 == struct))
+private void _emplace(bool new_obj, V1, V2)(ref V1 dst, ref V2 src) @trusted
+    if (is(V1 == struct) && is(Unqual!V1 == Unqual!V2))
 {
-    static if (new_obj)
+    static if (!new_obj) // assign
     {
-        V1 tmp = cast(V1)src; //create copy and call postblit
-        V1 init = V1.init;
-        (cast(void*)&dst)[0 .. V1.sizeof] = (cast(void*)&tmp)[0 .. V1.sizeof]; //bitwise copy of object, which already postblitted
-        (cast(void*)&tmp)[0 .. V1.sizeof] = (cast(void*)&init)[0 .. V1.sizeof];
+        static if (!isAssignable!(V1, V2))
+            throw new RangeError("existing non-assignable AA entry.");
+        else
+            dst = src;
     }
     else
     {
-        V1 tmp = src; //create copy and call postblit
-        V1 tmp2 = void;
-        V1 init = V1.init;
-        (cast(void*)&tmp2)[0 .. V1.sizeof] = (cast(void*)dst)[0 .. V1.sizeof];
-        (cast(void*)&dst)[0 .. V1.sizeof] = (cast(void*)&tmp)[0 .. V1.sizeof];
-        (cast(void*)&tmp)[0 .. V1.sizeof] = (cast(void*)&init)[0 .. V1.sizeof];
-        //Now tmp2 contains the old dst value (and it will be destructed)
-        //dst contains src value, which corrctly postblitted
-        //tmp contains init and it desctuctor shouldn't do any non-trivial actions
+        static if (hasElaborateDestructor!V1)
+        {
+            // copy to tmp so that the dtor gets called
+            V1 tmp = void;
+            (cast(void*)&tmp)[0 .. V1.sizeof] = (cast(void*)&dst)[0 .. V1.sizeof];
+        }
+        // copy
+        (cast(void*)&dst)[0 .. V1.sizeof] = (cast(void*)&src)[0 .. V1.sizeof];
+
+        static if (isCopyConstructable!V1) // call postblit because src can be an LValue
+            if (auto postblit = _getPostblit!V1()) postblit(dst);
     }
 }
 
@@ -1651,6 +1682,33 @@ private void _emplace(bool new_obj, V1, V2)(ref V1 dst, ref V2 src) @trusted if 
 {
     static assert(V1.sizeof == V2.sizeof);
     *(cast(Unqual!V1*)&dst) = *(cast(Unqual!V1*)&src);
+}
+
+private template _PostBlitType(T)
+{
+    // assume that ref T and void* are equivalent in abi level.
+    static if (is(T == struct))
+        alias _PostBlitType = typeof(function (ref T t){ T a = t; });
+    else
+        alias _PostBlitType = typeof(delegate (ref T t){ T a = t; });
+}
+
+// Returns null, or a delegate to call postblit of T
+private auto _getPostblit(T)() @trusted pure nothrow @nogc
+{
+    // infer static postblit type, run postblit if any
+    static if (is(T == struct))
+    {
+        import core.internal.traits : Unqual;
+        // use typeid(Unqual!T) here to skip TypeInfo_Const/Shared/...
+        return cast(_PostBlitType!T)typeid(Unqual!T).xpostblit;
+    }
+    else if ((&typeid(T).postblit).funcptr !is &TypeInfo.postblit)
+    {
+        return cast(_PostBlitType!T)&typeid(T).postblit;
+    }
+    else
+        return null;
 }
 
 private template isCopyConstructable(T)

@@ -91,3 +91,40 @@ template staticIota(int beg, int end)
     }
 }
 
+enum hasElaborateDestructor() = false;
+
+template hasElaborateDestructor(S)
+{
+    static if (__traits(isStaticArray, S) && S.length)
+    {
+        enum bool hasElaborateDestructor = hasElaborateDestructor!(typeof(S.init[0]));
+    }
+    else static if (is(S == struct))
+    {
+        enum hasElaborateDestructor = hasMember!(S, "__dtor")
+            || hasElaborateDestructor!(typeof(S.tupleof[0 .. $ - __traits(isNested, S)]));
+    }
+    else
+    {
+        enum bool hasElaborateDestructor = false;
+    }
+}
+
+template hasElaborateDestructor(S...) if (S.length > 1)
+{
+    enum hasElaborateDestructor = hasElaborateDestructor!(S[0 .. $/2]) ||
+        hasElaborateDestructor!(S[$/2 .. $]);
+}
+
+template hasMember(S, string mem)
+{
+    static if (is(T == struct) || is(T == class) || is(T == union) || is(T == interface))
+        enum hasMember =
+        {
+            foreach (m; __traits(getMember, S))
+                if (m == mem) return true;
+            return false;
+        }();
+    else
+        enum hasMember = false;
+}
