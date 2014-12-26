@@ -2336,10 +2336,48 @@ struct Gcx
         return 1;
     }
 
+    static struct MMapArray(T)
+    {
+        @disable this(this);
+
+        void reset()
+        {
+            os_mem_unmap(_p, _length * T.sizeof);
+            _p = null;
+            _length = 0;
+        }
+
+        @property void length(size_t nlen)
+        {
+            auto p = cast(T*)os_mem_map(nlen * T.sizeof);
+            if (p is null) onOutOfMemoryError();
+            immutable ncopy = nlen < _length ? nlen : _length;
+            p[0 .. ncopy] = _p[0 .. ncopy];
+            os_mem_unmap(_p, _length * T.sizeof);
+            _p = p;
+            _length = nlen;
+        }
+
+        @property size_t length() const
+        {
+            return _length;
+        }
+
+        ref inout(T) opIndex(size_t idx) inout
+        in { assert(idx < length); }
+        body
+        {
+            return _p[idx];
+        }
+
+    private:
+        T* _p;
+        size_t _length;
+    }
+
     // todo stack for mark
-    import rt.util.container.array;
     static struct Todo { void** p1, p2; }
-    Array!Todo todo;
+    MMapArray!Todo todo;
 
     /**
      * Search a range of memory values and mark any pointers into the GC pool.
@@ -2426,7 +2464,10 @@ struct Gcx
                         if (!pool.noscan.test(biti))
                         {
                             if (todoi == todo.length)
-                                todo.length = todo.length ? 2 * todo.length : 4;
+                            {
+                                auto noinline = &todo.length;
+                                noinline(todo.length ? 2 * todo.length : PAGESIZE / Todo.sizeof);
+                            }
                             immutable sz = bin < B_PAGE ? binsize[bin] : pool.bPageOffsets[pn] * PAGESIZE;
                             todo[todoi++] = Todo(cast(void**)base, cast(void**)(base + sz));
                         }
