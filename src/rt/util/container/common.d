@@ -9,6 +9,7 @@ module rt.util.container.common;
 
 import core.stdc.stdlib : malloc, realloc;
 public import core.stdc.stdlib : free;
+nothrow:
 
 void* xrealloc(void* ptr, size_t sz)
 {
@@ -20,7 +21,7 @@ void* xrealloc(void* ptr, size_t sz)
     assert(0);
 }
 
-void* xmalloc(size_t sz) nothrow
+void* xmalloc(size_t sz)
 {
     import core.exception;
     if (auto nptr = .malloc(sz))
@@ -31,6 +32,7 @@ void* xmalloc(size_t sz) nothrow
 
 void destroy(T)(ref T t) if (is(T == struct))
 {
+    scope(failure) assert(0); // enforce nothrow
     object.destroy(t);
 }
 

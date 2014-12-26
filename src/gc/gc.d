@@ -112,14 +112,6 @@ __gshared size_t maxPoolMemory;
 private
 {
     enum USE_CACHE = true;
-
-    // The maximum number of recursions of mark() before transitioning to
-    // multiple heap traversals to avoid consuming O(D) stack space where
-    // D is the depth of the heap graph.
-    version(Win64)
-        enum MAX_MARK_RECURSIONS = 32; // stack overflow in fibers
-    else
-        enum MAX_MARK_RECURSIONS = 64;
 }
 
 private
@@ -1424,7 +1416,6 @@ struct Gcx
 
     uint noStack;       // !=0 means don't scan stack
     uint log;           // turn on logging
-    uint anychanges;
     uint inited;
     uint running;
     int disabled;       // turn off collections if >0
@@ -1490,6 +1481,7 @@ struct Gcx
 
         roots.removeAll();
         ranges.removeAll();
+        todo.reset();
     }
 
 
@@ -2344,24 +2336,22 @@ struct Gcx
         return 1;
     }
 
-    /**
-     * Mark overload for initial mark() call.
-     */
-    void mark(void *pbot, void *ptop) nothrow
-    {
-        mark(pbot, ptop, MAX_MARK_RECURSIONS);
-    }
+    // todo stack for mark
+    import rt.util.container.array;
+    static struct Todo { void** p1, p2; }
+    Array!Todo todo;
 
     /**
      * Search a range of memory values and mark any pointers into the GC pool.
      */
-    void mark(void *pbot, void *ptop, int nRecurse) nothrow
+    void mark(void *pbot, void *ptop) nothrow
     {
         //import core.stdc.stdio;printf("nRecurse = %d\n", nRecurse);
         void **p1 = cast(void **)pbot;
         void **p2 = cast(void **)ptop;
+        size_t todoi;
+    Lagain:
         size_t pcache = 0;
-        uint changes = 0;
 
         //printf("marking range: %p -> %p\n", pbot, ptop);
         for (; p1 < p2; p1++)
@@ -2435,28 +2425,10 @@ struct Gcx
                         //if (log) debug(PRINTF) printf("\t\tmarking %p\n", p);
                         if (!pool.noscan.test(biti))
                         {
-                            if(nRecurse == 0) {
-                                // Then we've got a really deep heap graph.
-                                // Start marking stuff to be scanned when we
-                                // traverse the heap again next time, to save
-                                // stack space.
-                                pool.scan.set(biti);
-                                changes = 1;
-                                pool.newChanges = true;
-                            } else {
-                                // Directly recurse mark() to prevent having
-                                // to traverse the heap O(D) times where D
-                                // is the max depth of the heap graph.
-                                if (bin < B_PAGE)
-                                {
-                                    mark(base, base + binsize[bin], nRecurse - 1);
-                                }
-                                else
-                                {
-                                    auto u = pool.bPageOffsets[pn];
-                                    mark(base, base + u * PAGESIZE, nRecurse - 1);
-                                }
-                            }
+                            if (todoi == todo.length)
+                                todo.length = todo.length ? 2 * todo.length : 4;
+                            immutable sz = bin < B_PAGE ? binsize[bin] : pool.bPageOffsets[pn] * PAGESIZE;
+                            todo[todoi++] = Todo(cast(void**)base, cast(void**)(base + sz));
                         }
 
                         debug (LOGGING) log_parent(sentinel_add(pool.baseAddr + (biti << pool.shiftBy)), sentinel_add(pbot));
@@ -2464,7 +2436,12 @@ struct Gcx
                 }
             }
         }
-        anychanges |= changes;
+        if (todoi--)
+        {
+            p1 = todo[todoi].p1;
+            p2 = todo[todoi].p2;
+            goto Lagain;
+        }
     }
 
 
@@ -2491,12 +2468,10 @@ struct Gcx
 
         thread_suspendAll();
 
-        anychanges = 0;
         for (n = 0; n < npools; n++)
         {
             pool = pooltable[n];
             pool.mark.zero();
-            pool.scan.zero();
             if(!pool.isLargeObject) pool.freebits.zero();
         }
 
@@ -2518,7 +2493,6 @@ struct Gcx
         for (n = 0; n < npools; n++)
         {
             pool = pooltable[n];
-            pool.newChanges = false;  // Some of these get set to true on stack scan.
             if(!pool.isLargeObject)
             {
                 pool.mark.copy(&pool.freebits);
@@ -2557,65 +2531,6 @@ struct Gcx
         //log--;
 
         debug(COLLECT_PRINTF) printf("\tscan heap\n");
-        int nTraversals;
-        while (anychanges)
-        {
-            //import core.stdc.stdio;  printf("nTraversals = %d\n", ++nTraversals);
-            for (n = 0; n < npools; n++)
-            {
-                pool = pooltable[n];
-                pool.oldChanges = pool.newChanges;
-                pool.newChanges = false;
-            }
-
-            debug(COLLECT_PRINTF) printf("\t\tpass\n");
-            anychanges = 0;
-            for (n = 0; n < npools; n++)
-            {
-                pool = pooltable[n];
-                if(!pool.oldChanges) continue;
-
-                auto shiftBy = pool.shiftBy;
-                auto bbase = pool.scan.base();
-                auto btop = bbase + pool.scan.nwords;
-                //printf("\t\tn = %d, bbase = %p, btop = %p\n", n, bbase, btop);
-                for (auto b = bbase; b < btop;)
-                {
-                    auto bitm = *b;
-                    if (!bitm)
-                    {   b++;
-                        continue;
-                    }
-                    *b = 0;
-
-                    auto o = pool.baseAddr + (b - bbase) * ((typeof(bitm).sizeof*8) << shiftBy);
-
-                    auto firstset = bsf(bitm);
-                    bitm >>= firstset;
-                    o += firstset << shiftBy;
-
-                    while(bitm)
-                    {
-                        auto pn = cast(size_t)(o - pool.baseAddr) / PAGESIZE;
-                        auto bin = cast(Bins)pool.pagetable[pn];
-                        if (bin < B_PAGE)
-                        {
-                            mark(o, o + binsize[bin]);
-                        }
-                        else if (bin == B_PAGE)
-                        {
-                            auto u = pool.bPageOffsets[pn];
-                            mark(o, o + u * PAGESIZE);
-                        }
-
-                        bitm >>= 1;
-                        auto nbits = bsf(bitm);
-                        bitm >>= nbits;
-                        o += (nbits + 1) << shiftBy;
-                    }
-                }
-            }
-        }
 
         thread_processGCMarks(&isMarked);
         thread_resumeAll();
@@ -3105,7 +3020,6 @@ struct Pool
     byte* baseAddr;
     byte* topAddr;
     GCBits mark;        // entries already scanned, or should not be scanned
-    GCBits scan;        // entries that need to be scanned
     GCBits freebits;    // entries that are on the free list
     GCBits finals;      // entries that need finalizer run on them
     GCBits noscan;      // entries that should not be scanned
@@ -3118,8 +3032,6 @@ struct Pool
     ubyte* pagetable;
 
     bool isLargeObject;
-    bool oldChanges;  // Whether there were changes on the last mark.
-    bool newChanges;  // Whether there were changes on the current mark.
 
     uint shiftBy;    // shift count for the divisor used for determining bit indices.
 
@@ -3162,7 +3074,6 @@ struct Pool
         auto nbits = cast(size_t)poolsize >> shiftBy;
 
         mark.alloc(nbits);
-        scan.alloc(nbits);
 
         // pagetable already keeps track of what's free for the large object
         // pool.
@@ -3218,7 +3129,6 @@ struct Pool
             cstdlib.free(bPageOffsets);
 
         mark.Dtor();
-        scan.Dtor();
         if(isLargeObject)
         {
             nointerior.Dtor();
