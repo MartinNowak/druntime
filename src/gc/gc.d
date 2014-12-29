@@ -1481,7 +1481,7 @@ struct Gcx
 
         roots.removeAll();
         ranges.removeAll();
-        todo.reset();
+        toscan.reset();
     }
 
 
@@ -2336,62 +2336,100 @@ struct Gcx
         return 1;
     }
 
-    static struct MMapArray(T)
+    static struct ToScanStack
     {
+    nothrow:
         @disable this(this);
 
         void reset()
         {
-            os_mem_unmap(_p, _length * T.sizeof);
+            os_mem_unmap(_p, _cap * Range.sizeof);
             _p = null;
             _length = 0;
         }
 
-        @property void length(size_t nlen)
+        void push(Range rng)
         {
-            auto p = cast(T*)os_mem_map(nlen * T.sizeof);
-            if (p is null) onOutOfMemoryError();
-            immutable ncopy = nlen < _length ? nlen : _length;
-            p[0 .. ncopy] = _p[0 .. ncopy];
-            os_mem_unmap(_p, _length * T.sizeof);
-            _p = p;
-            _length = nlen;
+            if (_length == _cap) grow();
+            _p[_length++] = rng;
         }
 
-        @property size_t length() const
-        {
-            return _length;
-        }
-
-        ref inout(T) opIndex(size_t idx) inout
-        in { assert(idx < length); }
+        Range pop()
+        in { assert(!empty); }
         body
         {
-            return _p[idx];
+            return _p[--_length];
         }
 
+        @property size_t length() const { return _length; }
+        @property bool empty() const { return !length; }
+
     private:
-        T* _p;
-        size_t _length;
+        void grow()
+        {
+            immutable ncap = _cap ? 2 * _cap : PAGESIZE / Range.sizeof;
+            auto p = cast(Range*)os_mem_map(ncap * Range.sizeof);
+            if (p is null) onOutOfMemoryError();
+            if (_p !is null)
+            {
+                p[0 .. _length] = _p[0 .. _length];
+                os_mem_unmap(_p, _cap * Range.sizeof);
+            }
+            _p = p;
+            _cap = ncap;
+        }
+
+        Range* _p;
+        size_t _length, _cap;
     }
 
-    // todo stack for mark
-    static struct Todo { void** p1, p2; }
-    MMapArray!Todo todo;
+    ToScanStack toscan;
 
     /**
      * Search a range of memory values and mark any pointers into the GC pool.
      */
     void mark(void *pbot, void *ptop) nothrow
     {
-        //import core.stdc.stdio;printf("nRecurse = %d\n", nRecurse);
+        static void swap(ref Range a, ref Range b) nothrow { auto c = a; a = b; b = c; }
+
+        static bool merge(Range rng, Range[] rngs, ref size_t rngi) nothrow
+        {
+            size_t left=rngi, right=rngi;
+            foreach (i, ref r; rngs[0 .. rngi])
+            {
+                if (r.ptop == rng.pbot)
+                    left = i;
+                else if (r.pbot == rng.ptop)
+                    right = i;
+            }
+            if (left != rngi)
+            {
+                if (right != rngi)
+                {
+                    rngs[left].ptop = rngs[right].ptop;
+                    swap(rngs[right], rngs[--rngi]);
+                }
+                else
+                {
+                    rngs[left].ptop = rng.ptop;
+                }
+            }
+            else if (right != rngi)
+                rngs[right].pbot = rng.pbot;
+            else
+                return false;
+            return true;
+        }
+
         void **p1 = cast(void **)pbot;
         void **p2 = cast(void **)ptop;
-        size_t todoi;
+        Range[8] rngs = void;
+        size_t rngi;
+
     Lagain:
         size_t pcache = 0;
 
-        //printf("marking range: %p -> %p\n", pbot, ptop);
+        //printf("marking range: %p -> %p\n", p1, p2);
         for (; p1 < p2; p1++)
         {
             auto p = cast(byte *)(*p1);
@@ -2463,13 +2501,31 @@ struct Gcx
                         //if (log) debug(PRINTF) printf("\t\tmarking %p\n", p);
                         if (!pool.noscan.test(biti))
                         {
-                            if (todoi == todo.length)
-                            {
-                                auto noinline = &todo.length;
-                                noinline(todo.length ? 2 * todo.length : PAGESIZE / Todo.sizeof);
-                            }
                             immutable sz = bin < B_PAGE ? binsize[bin] : pool.bPageOffsets[pn] * PAGESIZE;
-                            todo[todoi++] = Todo(cast(void**)base, cast(void**)(base + sz));
+                            auto rng = Range(base, base + sz);
+                            if (!rngi || !merge(rng, rngs[0 .. rngi], rngi))
+                            {
+                                if (rngi == rngs.length)
+                                {
+                                    // no more space, push rest of current range and recurse
+                                    auto noinline = &toscan.push;
+                                    noinline(Range(++p1, p2));
+                                    foreach_reverse (i; 1 .. rngi)
+                                    {
+                                        // printf("toscan %p %zu\n", rngs[i].pbot, rngs[i].ptop - rngs[i].pbot);
+                                        noinline(rngs[i]);
+                                    }
+                                    rngi = 0;
+                                    // printf("recurse %p %zu\n", p1, cast(size_t)p2 - cast(size_t)p1);
+                                    goto Lpop;
+                                }
+                                rngs[rngi++] = rng;
+                                // printf("  push %p %zu %zu\n", base, sz, rngi);
+                            }
+                            else if (rngi)
+                            {
+                                // printf("  merge %p %zu %zu\n", base, sz, rngi);
+                            }
                         }
 
                         debug (LOGGING) log_parent(sentinel_add(pool.baseAddr + (biti << pool.shiftBy)), sentinel_add(pbot));
@@ -2477,10 +2533,23 @@ struct Gcx
                 }
             }
         }
-        if (todoi--)
+        if (rngi)
         {
-            p1 = todo[todoi].p1;
-            p2 = todo[todoi].p2;
+            // pop range from local stack and recurse
+            --rngi;
+        Lpop:
+            p1 = cast(void**)rngs[rngi].pbot;
+            p2 = cast(void**)rngs[rngi].ptop;
+            // printf("  pop %p %zu\n", p1, cast(size_t)p2 - cast(size_t)p1);
+            goto Lagain;
+        }
+        else if (!toscan.empty)
+        {
+            // pop range from global stack and recurse
+            auto rng = toscan.pop();
+            p1 = cast(void**)rng.pbot;
+            p2 = cast(void**)rng.ptop;
+            // printf("  pop %p %zu\n", p1, cast(size_t)p2 - cast(size_t)p1);
             goto Lagain;
         }
     }
