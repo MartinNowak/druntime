@@ -856,13 +856,13 @@ class GC
         }
         else
         {   // Add to free list
-            List *list = cast(List*)p;
+            auto entry = cast(FreeList*)p;
 
             debug (MEMSTOMP) memset(p, 0xF2, binsize[bin]);
 
-            list.next = gcx.bucket[bin];
-            list.pool = pool;
-            gcx.bucket[bin] = list;
+            pool.freebits.set(biti);
+            *entry = gcx.freelist[bin];
+            gcx.freelist[bin] = FreeList(pool, biti, true);
         }
 
         gcx.log_free(sentinel_add(p));
@@ -1248,7 +1248,6 @@ class GC
         size_t flsize = 0;
 
         size_t n;
-        size_t bsize = 0;
 
         //debug(PRINTF) printf("getStats()\n");
         memset(&stats, 0, GCStats.sizeof);
@@ -1265,24 +1264,23 @@ class GC
                 else if (bin == B_PAGE)
                     stats.pageblocks++;
                 else if (bin < B_PAGE)
-                    bsize += PAGESIZE;
+                {
+                    immutable sz = binsize[bin];
+                    immutable stride = sz / 16;
+                    immutable top = (j + 1) * PAGESIZE / 16;
+                    for (size_t i = j * PAGESIZE / 16; i < top; i += stride)
+                    {
+                        if (pool.freebits.test(i))
+                            flsize += sz;
+                        else
+                            usize += sz;
+                    }
+                }
             }
         }
-
-        for (n = 0; n < B_PAGE; n++)
-        {
-            //debug(PRINTF) printf("bin %d\n", n);
-            for (List *list = gcx.bucket[n]; list; list = list.next)
-            {
-                //debug(PRINTF) printf("\tlist %p\n", list);
-                flsize += binsize[n];
-            }
-        }
-
-        usize = bsize - flsize;
 
         stats.poolsize = psize;
-        stats.usedsize = bsize - flsize;
+        stats.usedsize = usize;
         stats.freelistsize = flsize;
     }
 }
@@ -1315,13 +1313,38 @@ enum
 
 alias ubyte Bins;
 
-
-struct List
+struct FreeList
 {
-    List *next;
-    Pool *pool;
-}
+pure nothrow:
+    this(Pool* pool, size_t biti, bool bitscan=true)
+    {
+        if (bitscan)
+            _pool = pool;
+        else
+            _pool = cast(Pool*)(cast(size_t)_pool | 0x1);
+        this.biti = biti;
+    }
 
+    // whether to perform a bitscan to find the next free slot
+    @property bool bitscan() const
+    {
+        return !(cast(size_t)_pool & 0x1);
+    }
+
+    @property Pool* pool()
+    {
+        return cast(Pool*)(cast(size_t)_pool & ~cast(size_t)0x1);
+    }
+
+    bool opCast(T:bool)() const
+    {
+        return _pool !is null;
+    }
+
+    // next free slot is in pool at bit position
+    Pool* _pool;
+    size_t biti;
+}
 
 struct Range
 {
@@ -1370,7 +1393,8 @@ struct Gcx
     size_t npools;
     Pool **pooltable;
 
-    List*[B_MAX]bucket;        // free list for each size
+    FreeList[B_PAGE] freelist;
+    debug (INVARIANT) bool skipFreelistInvariant;
 
 
     void initialize()
@@ -1467,10 +1491,37 @@ struct Gcx
                 assert(range.pbot <= range.ptop);
             }
 
-            for (size_t i = 0; i < B_PAGE; i++)
+            if (skipFreelistInvariant)
+                return;
+
+            foreach (bin; Bins.min .. B_PAGE)
             {
-                for (auto list = cast(List*)bucket[i]; list; list = list.next)
+                immutable stride = binsize[bin] / 16;
+                auto fl = cast()freelist[bin];
+                while (fl.pool)
                 {
+                    immutable tag = fl.pool.tag;
+                    auto pool = fl.pool.clrTag;
+                    auto biti = fl.biti;
+
+                    const(byte)* p;
+                    if (!tag)
+                    {
+                        // next pointer is in last free bucket
+                        for (size_t i = roundUp(biti, PAGESIZE / 16) - stride; i >= biti; i -= stride)
+                        {
+                            if (pool.freebits.test(i))
+                            {
+                                p = pool.baseAddr + i * 16;
+                                break;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        p = pool.baseAddr + biti * 16;
+                    }
+                    fl = *cast(FreeList*)p;
                 }
             }
         }
@@ -2078,12 +2129,10 @@ struct Gcx
     {
         alloc_size = binsize[bin];
 
-        void* p;
         bool tryAlloc() nothrow
         {
-            if (!bucket[bin] && !allocPage(bin))
+            if (!freelist[bin] && !allocPage(bin))
                 return false;
-            p = bucket[bin];
             return true;
         }
 
@@ -2108,14 +2157,53 @@ struct Gcx
                 // out of luck or memory
                 onOutOfMemoryError();
         }
-        assert(p !is null);
 
-        // Return next item from free list
-        bucket[bin] = (cast(List*)p).next;
-        auto pool = (cast(List*)p).pool;
-        if (bits) setBits(pool, (p - pool.baseAddr) >> pool.shiftBy, bits);
+        auto p = use(freelist[bin], bin, bits);
+
         //debug(PRINTF) printf("\tmalloc => %p\n", p);
         debug (MEMSTOMP) memset(p, 0xF0, size);
+        return p;
+    }
+
+    static size_t roundUp(size_t v, size_t sz) pure nothrow
+    {
+        assert(!(sz & (sz - 1))); // pow 2
+        return v + (-v & sz - 1);
+    }
+
+    unittest
+    {
+        assert(roundUp(0, 16) == 0);
+        assert(roundUp(1, 16) == 16);
+        assert(roundUp(15, 16) == 16);
+        assert(roundUp(16, 16) == 16);
+        assert(roundUp(17, 16) == 32);
+    }
+
+    byte* use(ref FreeList fl, Bins bin, uint bits) nothrow
+    {
+        auto pool = fl.pool;
+        auto biti = fl.biti;
+        auto p = pool.baseAddr + (biti << pool.shiftBy);
+        // mark as used
+        pool.freebits.clear(biti);
+        // either bitscan or dereference next free slot
+        if (fl.bitscan)
+        {
+            immutable stride = binsize[bin] / 16;
+            immutable top = roundUp(biti + stride, PAGESIZE / 16);
+            for (auto i = biti + stride; i < top; i += stride)
+            {
+                if (!pool.freebits.test(i)) continue;
+                fl.biti = i;
+                goto LhasNext;
+            }
+        }
+        // dereference last free slot on page (or explicitly freed slot)
+        fl = *cast(FreeList*)p;
+
+    LhasNext:
+        if (bits) setBits(pool, biti, bits);
         return p;
     }
 
@@ -2286,44 +2374,42 @@ struct Gcx
     /**
      * Allocate a page of bin's.
      * Returns:
-     *  0       failed
+     *  false       failed
      */
-    int allocPage(Bins bin) nothrow
+    bool allocPage(Bins bin) nothrow
     {
         Pool*  pool;
-        size_t n;
         size_t pn;
-        byte*  p;
-        byte*  ptop;
 
         //debug(PRINTF) printf("Gcx::allocPage(bin = %d)\n", bin);
-        for (n = 0; n < npools; n++)
+        foreach (n; 0 .. npools)
         {
             pool = pooltable[n];
-            if(pool.isLargeObject) continue;
+            if (pool.isLargeObject) continue;
             pn = pool.allocPages(1);
             if (pn != OPFAIL)
                 goto L1;
         }
-        return 0;               // failed
+        return false;               // failed
 
       L1:
         pool.pagetable[pn] = cast(ubyte)bin;
         pool.freepages--;
 
-        // Convert page to free list
-        size_t size = binsize[bin];
-        List **b = &bucket[bin];
-
-        p = pool.baseAddr + pn * PAGESIZE;
-        ptop = p + PAGESIZE;
-        for (; p < ptop; p += size)
-        {
-            (cast(List *)p).next = *b;
-            (cast(List *)p).pool = pool;
-            *b = cast(List *)p;
-        }
-        return 1;
+        // convert page to free list
+        immutable biti = pn * PAGESIZE / 16;
+        immutable top = biti + PAGESIZE / 16;
+        immutable stride = binsize[bin] / 16;
+        pool.freebits.clear(biti, top);
+        for (size_t i = biti; i < top; i += stride)
+            pool.freebits.set(i);
+        // clear free list successor
+        auto plast = pool.baseAddr + (pn + 1) * PAGESIZE - binsize[bin];
+        (cast(FreeList*)plast)._pool = null;
+        // set as first free list entry
+        assert(!freelist[bin]);
+        freelist[bin] = FreeList(pool, biti);
+        return true;
     }
 
     static struct ToScanStack
@@ -2526,24 +2612,9 @@ struct Gcx
         {
             pool = pooltable[n];
             pool.mark.zero();
-            if(!pool.isLargeObject) pool.freebits.zero();
         }
-
-        debug(COLLECT_PRINTF) printf("Set bits\n");
 
         // Mark each free entry, so it doesn't get scanned
-        for (n = 0; n < B_PAGE; n++)
-        {
-            for (List *list = bucket[n]; list; list = list.next)
-            {
-                pool = list.pool;
-                assert(pool);
-                pool.freebits.set(cast(size_t)(cast(byte*)list - pool.baseAddr) / 16);
-            }
-        }
-
-        debug(COLLECT_PRINTF) printf("Marked free entries.\n");
-
         for (n = 0; n < npools; n++)
         {
             pool = pooltable[n];
@@ -2552,6 +2623,7 @@ struct Gcx
                 pool.mark.copy(&pool.freebits);
             }
         }
+        debug(COLLECT_PRINTF) printf("Marked free entries.\n");
     }
 
     // collection step 2: mark roots and heap
@@ -2647,6 +2719,11 @@ struct Gcx
             }
             else
             {
+                debug (INVARIANT)
+                {
+                    skipFreelistInvariant = true;
+                    scope (exit) skipFreelistInvariant = true;
+                }
 
                 for (pn = 0; pn < pool.npages; pn++)
                 {
@@ -2690,9 +2767,8 @@ struct Gcx
 
                                 toClear |= GCBits.BITS_1 << clearIndex;
 
-                                List *list = cast(List *)p;
-                                debug(COLLECT_PRINTF) printf("\tcollecting %p\n", list);
-                                log_free(sentinel_add(list));
+                                debug(COLLECT_PRINTF) printf("\tcollecting %p\n", p);
+                                log_free(sentinel_add(p));
 
                                 debug (MEMSTOMP) memset(p, 0xF3, size);
 
@@ -2716,65 +2792,59 @@ struct Gcx
     // collection step 4: recover pages with no live objects, rebuild free lists
     size_t recover() nothrow
     {
-        // Zero buckets
-        bucket[] = null;
+        FreeList*[freelist.length] nextFree=void;
+        foreach (i, ref pfree; nextFree)
+            pfree = &freelist[i];
 
         // Free complete pages, rebuild free list
         debug(COLLECT_PRINTF) printf("\tfree complete pages\n");
-        size_t recoveredpages = 0;
-        for (size_t n = 0; n < npools; n++)
+        size_t freedSmallPages = 0;
+        foreach (pool; pooltable[0 .. npools])
         {
-            size_t pn;
-            Pool* pool = pooltable[n];
+            if (pool.isLargeObject) continue;
+            foreach (pn; 0 .. pool.npages)
+            {
+                immutable bin = cast(Bins)pool.pagetable[pn];
+                if (bin == B_FREE) continue;
+                assert(bin < B_PAGE);
 
-            if(pool.isLargeObject)
+                immutable biti = pn * (PAGESIZE / 16);
+                immutable top = biti + PAGESIZE / 16;
+                immutable stride = binsize[bin] / 16;
+
+                for (size_t i = biti; i < top; i += stride)
+                    if (!pool.freebits.test(i)) goto Lnotfree;
+                pool.pagetable[pn] = B_FREE;
+                if (pn < pool.searchStart) pool.searchStart = pn;
+                ++pool.freepages;
+                ++freedSmallPages;
                 continue;
 
-            for (pn = 0; pn < pool.npages; pn++)
-            {
-                Bins   bin = cast(Bins)pool.pagetable[pn];
-                size_t biti;
-                size_t u;
-
-                if (bin < B_PAGE)
-                {
-                    size_t size = binsize[bin];
-                    size_t bitstride = size / 16;
-                    size_t bitbase = pn * (PAGESIZE / 16);
-                    size_t bittop = bitbase + (PAGESIZE / 16);
-                    byte*  p;
-
-                    biti = bitbase;
-                    for (biti = bitbase; biti < bittop; biti += bitstride)
-                    {
-                        if (!pool.freebits.test(biti))
-                            goto Lnotfree;
-                    }
-                    pool.pagetable[pn] = B_FREE;
-                    if(pn < pool.searchStart) pool.searchStart = pn;
-                    pool.freepages++;
-                    recoveredpages++;
+            Lnotfree:
+                // find first free slot
+                size_t first=void;
+                for (first = biti; first < top; first += stride)
+                    if (pool.freebits.test(first)) break;
+                // no free slots
+                if (first == top)
                     continue;
-
-                Lnotfree:
-                    p = pool.baseAddr + pn * PAGESIZE;
-                    for (u = 0; u < PAGESIZE; u += size)
-                    {   biti = bitbase + u / 16;
-                        if (pool.freebits.test(biti))
-                        {
-                            List *list = cast(List *)(p + u);
-                            if (list.next != bucket[bin])       // avoid unnecessary writes
-                                list.next = bucket[bin];
-                            list.pool = pool;
-                            bucket[bin] = list;
-                        }
-                    }
-                }
+                // chain into freelist
+                *nextFree[bin] = FreeList(pool, first);
+                // find last free slot
+                size_t last=void;
+                for (last = top - stride; ; last -= stride)
+                    if (pool.freebits.test(last)) break;
+                assert(last >= first);
+                // to store next link
+                nextFree[bin] = cast(FreeList*)(pool.baseAddr + last * 16);
             }
         }
+        // terminate freelist chains
+        foreach (ref pfree; nextFree)
+            *pfree = FreeList(null, 0);
 
-        debug(COLLECT_PRINTF) printf("\trecovered pages = %d\n", recoveredpages);
-        return recoveredpages;
+        debug(COLLECT_PRINTF) printf("\trecovered pages = %d\n", freedSmallPages);
+        return freedSmallPages;
     }
 
     /**
