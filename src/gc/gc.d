@@ -307,10 +307,15 @@ nothrow:
         _bins[bin] = res.next;
         if (alloc_size)
             *alloc_size = binsize[bin];
-        if (bits) setAttr(res, bits);
+        if (bits)
+        {
+            auto pool = res.pool;
+            immutable biti = cast(size_t)(cast(byte*)res - pool.baseAddr) >> pool.shiftBy;
+            pool.setBits(biti, bits);
+        }
         return res;
     }
-
+    /*
     uint setAttr(void* p, uint v) nothrow
     {
         if (auto blk = _blkInfoCache.find(p))
@@ -343,6 +348,12 @@ nothrow:
             return _gc.query(p);
     }
 
+    void runFinalizers(in void[] segment) nothrow
+    {
+        _blkInfoCache.flush();
+        _gc.runFinalizers(segment);
+    }
+    */
     static shared size_t _initCount;
     __gshared GC _gc;
     alias _gc this;
@@ -400,7 +411,7 @@ private:
 
     Bins[64] _trace;
     List*[B_PAGE] _bins;
-    BlkInfoCache _blkInfoCache;
+    //BlkInfoCache _blkInfoCache;
     ubyte[B_PAGE] _count;
     size_t _tracei;
 }
@@ -562,16 +573,16 @@ struct GC
 
     void setAttrs(BlkInfo[] infos) nothrow
     {
-        gcLock.lock();
-        foreach (ref info; infos)
-        {
-            auto pool = gcx.findPool(info.base);
-            if (pool is null) continue;
+        runLocked!(otherTime, numOthers)({
+            foreach (ref info; infos)
+            {
+                auto pool = gcx.findPool(info.base);
+                if (pool is null) continue;
 
-            immutable biti = cast(size_t)(info.base - pool.baseAddr) >> pool.shiftBy;
-            pool.setBits(biti, info.attr);
-        }
-        gcLock.unlock();
+                immutable biti = cast(size_t)(info.base - pool.baseAddr) >> pool.shiftBy;
+                pool.setBits(biti, info.attr);
+            }
+        });
     }
 
     /**
@@ -610,14 +621,15 @@ struct GC
     {
         assert(count);
 
-        gcLock.lock();
-        size_t dummy=void;
-        List* res = cast(List*)gcx.smallAlloc(bin, dummy, 0);
-        auto p = res;
-        for (; --count; p = p.next)
-            p.next = cast(List*)gcx.smallAlloc(bin, dummy, 0);
-        p.next = null;
-        gcLock.unlock();
+        List* res;
+        runLocked!(mallocTime, numMallocs)({
+            size_t dummy=void;
+            res = cast(List*)gcx.smallAlloc(bin, dummy, 0);
+            auto p = res;
+            for (; --count; p = p.next)
+                p.next = cast(List*)gcx.smallAlloc(bin, dummy, 0);
+            p.next = null;
+        });
         return res;
     }
 
@@ -3008,6 +3020,8 @@ struct Pool
         return bits;
     }
 
+    import core.atomic;
+
     /**
      *
      */
@@ -3018,17 +3032,17 @@ struct Pool
         immutable keep = ~(GCBits.BITS_1 << bitOffset);
 
         if (mask & BlkAttr.FINALIZE && finals.nbits)
-            finals.data[dataIndex] &= keep;
+            atomicOp!"&="(finals.data[dataIndex], keep);
 
         if (structFinals.nbits && (mask & BlkAttr.STRUCTFINAL))
-            structFinals.data[dataIndex] &= keep;
+            atomicOp!"&="(structFinals.data[dataIndex], keep);
 
         if (mask & BlkAttr.NO_SCAN)
-            noscan.data[dataIndex] &= keep;
+            atomicOp!"&="(noscan.data[dataIndex], keep);
         if (mask & BlkAttr.APPENDABLE)
-            appendable.data[dataIndex] &= keep;
+            atomicOp!"&="(appendable.data[dataIndex], keep);
         if (nointerior.nbits && (mask & BlkAttr.NO_INTERIOR))
-            nointerior.data[dataIndex] &= keep;
+            atomicOp!"&="(nointerior.data[dataIndex], keep);
     }
 
     /**
@@ -3046,19 +3060,20 @@ struct Pool
         {
             if (!structFinals.nbits)
                 structFinals.alloc(mark.nbits);
-            structFinals.data[dataIndex] |= orWith;
+            atomicOp!"|="(structFinals.data[dataIndex], orWith);
+            //structFinals.data[dataIndex] |= orWith;
         }
 
         if (mask & BlkAttr.FINALIZE)
         {
             if (!finals.nbits)
                 finals.alloc(mark.nbits);
-            finals.data[dataIndex] |= orWith;
+            atomicOp!"|="(finals.data[dataIndex], orWith);
         }
 
         if (mask & BlkAttr.NO_SCAN)
         {
-            noscan.data[dataIndex] |= orWith;
+            atomicOp!"|="(noscan.data[dataIndex], orWith);
         }
 //        if (mask & BlkAttr.NO_MOVE)
 //        {
@@ -3068,14 +3083,14 @@ struct Pool
 //        }
         if (mask & BlkAttr.APPENDABLE)
         {
-            appendable.data[dataIndex] |= orWith;
+            atomicOp!"|="(appendable.data[dataIndex], orWith);
         }
 
         if (isLargeObject && (mask & BlkAttr.NO_INTERIOR))
         {
             if(!nointerior.nbits)
                 nointerior.alloc(mark.nbits);
-            nointerior.data[dataIndex] |= orWith;
+            atomicOp!"|="(nointerior.data[dataIndex], orWith);
         }
     }
 
@@ -3092,23 +3107,23 @@ struct Pool
             if (!w) continue;
 
             immutable wi = beg + i;
-            freebits.data[wi] |= w;
-            noscan.data[wi] &= ~w;
-            appendable.data[wi] &= ~w;
+            atomicOp!"|="(freebits.data[wi], w);
+            atomicOp!"&="(noscan.data[wi], ~w);
+            atomicOp!"&="(appendable.data[wi], ~w);
         }
 
         if (finals.nbits)
         {
             foreach (i; staticIota!(0, PageBits.length))
                 if (toFree[i])
-                    finals.data[beg + i] &= ~toFree[i];
+                    atomicOp!"&="(finals.data[beg + i], ~toFree[i]);
         }
 
         if (structFinals.nbits)
         {
             foreach (i; staticIota!(0, PageBits.length))
                 if (toFree[i])
-                    structFinals.data[beg + i] &= ~toFree[i];
+                    atomicOp!"&="(structFinals.data[beg + i], ~toFree[i]);
         }
     }
 

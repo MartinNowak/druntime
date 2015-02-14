@@ -28,14 +28,14 @@ struct GCBits
     enum BITS_MASK = (BITS_PER_WORD - 1);
     enum BITS_1 = cast(wordtype)1;
 
-    wordtype* data;
+    shared(wordtype)* data;
     size_t nbits;
 
     void Dtor() nothrow
     {
         if (data)
         {
-            free(data);
+            free(cast(void*)data);
             data = null;
         }
     }
@@ -55,7 +55,7 @@ struct GCBits
     }
     body
     {
-        return core.bitop.bt(data, i);
+        return core.bitop.bt(cast(wordtype*)data, i);
     }
 
     int set(size_t i) nothrow
@@ -65,7 +65,7 @@ struct GCBits
     }
     body
     {
-        return core.bitop.bts(data, i);
+        return core.bitop.bts(cast(wordtype*)data, i);
     }
 
     int clear(size_t i) nothrow
@@ -75,12 +75,12 @@ struct GCBits
     }
     body
     {
-        return core.bitop.btr(data, i);
+        return core.bitop.btr(cast(wordtype*)data, i);
     }
 
     void zero() nothrow
     {
-        memset(data, 0, nwords * wordtype.sizeof);
+        memset(cast(wordtype*)data, 0, nwords * wordtype.sizeof);
     }
 
     void copy(GCBits *f) nothrow
@@ -90,7 +90,7 @@ struct GCBits
     }
     body
     {
-        memcpy(data, f.data, nwords * wordtype.sizeof);
+        memcpy(cast(wordtype*)data, cast(wordtype*)f.data, nwords * wordtype.sizeof);
     }
 
     @property size_t nwords() const pure nothrow
