@@ -23,7 +23,7 @@ extern extern(C) __gshared string[] rt_options;
 struct Config
 {
     bool disable;            // start disabled
-    byte profile;            // enable profiling with summary when terminating program
+    ubyte profile;           // enable profiling with summary when terminating program
     bool precise;            // enable precise scanning
     bool concurrent;         // enable concurrent collection
 
@@ -56,9 +56,11 @@ struct Config
 
     void help()
     {
+        version (unittest) if (inUnittest) return;
+
         string s = "GC options are specified as white space separated assignments:
     disable:0|1    - start disabled (%d)
-    profile:0|1    - enable profiling with summary when terminating program (%d)
+    profile:0|1|2  - enable profiling with summary when terminating program (%d)
     precise:0|1    - enable precise scanning (not implemented yet)
     concurrent:0|1 - enable concurrent collection (not implemented yet)
 
@@ -66,7 +68,7 @@ struct Config
     minPoolSize:N  - initial and minimum pool size in MB (%lld)
     maxPoolSize:N  - maximum pool size in MB (%lld)
     incPoolSize:N  - pool size increment MB (%lld)
-    heapSizeFactor:N - targeted heap size to used memory ratio (%f)
+    heapSizeFactor:N - targeted heap size to used memory ratio (%g)
 ";
         printf(s.ptr, disable, profile, cast(long)initReserve, cast(long)minPoolSize,
                cast(long)maxPoolSize, cast(long)incPoolSize, heapSizeFactor);
@@ -77,16 +79,20 @@ struct Config
         opt = skip!isspace(opt);
         while (opt.length)
         {
-            auto tail = find!(c => c == ':' || c == '=')(opt);
+            auto tail = find!(c => c == ':' || c == '=' || c == ' ')(opt);
             auto name = opt[0 .. $ - tail.length];
-            if (tail.length <= 1)
+            if (name == "help")
+            {
+                help();
+                opt = skip!isspace(tail);
+                continue;
+            }
+            if (tail.length <= 1 || tail[0] == ' ')
                 return optError("Missing argument for", name);
             tail = tail[1 .. $];
 
             switch (name)
             {
-            case "help": help(); break;
-
             foreach (field; __traits(allMembers, Config))
             {
                 static if (!is(typeof(__traits(getMember, this, field)) == function))
@@ -142,8 +148,10 @@ body
 
     if (!i)
         return parseError("a number", optname, str);
+    if (v > res.max)
+        return parseError("a number " ~ T.max.stringof ~ " or below", optname, str[0 .. i]);
     str = str[i .. $];
-    res = v;
+    res = cast(T) v;
     return true;
 }
 
@@ -199,28 +207,33 @@ unittest
     scope (exit) inUnittest = false;
 
     Config conf;
-    assert(!conf.parseOptions("profile"));
-    assert(!conf.parseOptions("profile:"));
-    assert(!conf.parseOptions("profile:5"));
-    assert(conf.parseOptions("profile:y") && conf.profile);
-    assert(conf.parseOptions("profile:n") && !conf.profile);
-    assert(conf.parseOptions("profile:Y") && conf.profile);
-    assert(conf.parseOptions("profile:N") && !conf.profile);
-    assert(conf.parseOptions("profile:1") && conf.profile);
-    assert(conf.parseOptions("profile:0") && !conf.profile);
+    assert(!conf.parseOptions("disable"));
+    assert(!conf.parseOptions("disable:"));
+    assert(!conf.parseOptions("disable:5"));
+    assert(conf.parseOptions("disable:y") && conf.disable);
+    assert(conf.parseOptions("disable:n") && !conf.disable);
+    assert(conf.parseOptions("disable:Y") && conf.disable);
+    assert(conf.parseOptions("disable:N") && !conf.disable);
+    assert(conf.parseOptions("disable:1") && conf.disable);
+    assert(conf.parseOptions("disable:0") && !conf.disable);
 
-    assert(conf.parseOptions("profile=y") && conf.profile);
-    assert(conf.parseOptions("profile=n") && !conf.profile);
+    assert(conf.parseOptions("disable=y") && conf.disable);
+    assert(conf.parseOptions("disable=n") && !conf.disable);
 
-    assert(conf.parseOptions("profile:1 minPoolSize:16"));
-    assert(conf.profile);
+    assert(conf.parseOptions("profile=0") && conf.profile == 0);
+    assert(conf.parseOptions("profile=1") && conf.profile == 1);
+    assert(conf.parseOptions("profile=2") && conf.profile == 2);
+    assert(!conf.parseOptions("profile=256"));
+
+    assert(conf.parseOptions("disable:1 minPoolSize:16"));
+    assert(conf.disable);
     assert(conf.minPoolSize == 16);
 
     assert(conf.parseOptions("heapSizeFactor:3.1"));
     assert(conf.heapSizeFactor == 3.1f);
-    assert(conf.parseOptions("heapSizeFactor:3.1234567890 profile:0"));
+    assert(conf.parseOptions("heapSizeFactor:3.1234567890 disable:0"));
     assert(conf.heapSizeFactor > 3.123f);
-    assert(!conf.profile);
+    assert(!conf.disable);
     assert(!conf.parseOptions("heapSizeFactor:3.0.2.5"));
     assert(conf.parseOptions("heapSizeFactor:2"));
     assert(conf.heapSizeFactor == 2.0f);
@@ -228,4 +241,8 @@ unittest
     assert(!conf.parseOptions("initReserve:foo"));
     assert(!conf.parseOptions("initReserve:y"));
     assert(!conf.parseOptions("initReserve:20.5"));
+
+    assert(conf.parseOptions("help"));
+    assert(conf.parseOptions("help profile:1"));
+    assert(conf.parseOptions("help profile:1 help"));
 }
