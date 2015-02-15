@@ -26,7 +26,6 @@ module gc.gc;
 //debug = PTRCHECK;             // more pointer checking
 //debug = PTRCHECK2;            // thorough but slow pointer checking
 //debug = INVARIANT;            // enable invariants
-//debug = PROFILE_API;          // profile API calls for config.profile > 1
 
 /*************** Configuration *********************/
 
@@ -392,35 +391,26 @@ struct GC
 
     private void runLocked(alias time, alias count)(scope void delegate() nothrow dg)
     {
-        debug(PROFILE_API)
-        {
-            MonoTimeNative tm = void;
-            if (GC.config.profile > 1)
-                tm = currTimeNative;
-        }
+        MonoTimeNative tm = void;
+        if (GC.config.profile > 1)
+            tm = currTimeNative;
 
         gcLock.lock();
 
-        debug(PROFILE_API)
+        if (GC.config.profile > 1)
         {
-            if (GC.config.profile > 1)
-            {
-                count++;
-                MonoTimeNative now = currTimeNative;
-                lockTime += now - tm;
-                tm = now;
-            }
+            count++;
+            MonoTimeNative now = currTimeNative;
+            lockTime += now - tm;
+            tm = now;
         }
 
         dg();
 
-        debug(PROFILE_API)
+        if (GC.config.profile > 1)
         {
-            if (GC.config.profile > 1)
-            {
-                MonoTimeNative now = currTimeNative;
-                time += now - tm;
-            }
+            MonoTimeNative now = currTimeNative;
+            time += now - tm;
         }
 
         gcLock.unlock();
@@ -1526,7 +1516,7 @@ struct Gcx
 
             char[30] apitxt;
             apitxt[0] = 0;
-            debug(PROFILE_API) if (GC.config.profile > 1)
+            if (GC.config.profile > 1)
             {
                 printf("\n");
                 printf("\tmalloc:  %llu calls, %lld ms\n", cast(ulong)numMallocs, mallocTime.toDuration.total!"msecs");
