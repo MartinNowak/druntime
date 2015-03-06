@@ -1775,7 +1775,7 @@ alias void delegate(Object) DEvent;
 //       that as a result, storing references to local objects within Monitor
 //       may not be safe or desirable.  Thus, devt is only valid if impl is
 //       null.
-struct Monitor
+private struct Monitor
 {
     IMonitor impl;
     /* internal */
@@ -1784,12 +1784,12 @@ struct Monitor
     /* stuff */
 }
 
-Monitor* getMonitor(Object h) pure nothrow
+private Monitor* _getMonitor(Object h) @trusted pure nothrow
 {
     return cast(Monitor*) h.__monitor;
 }
 
-void setMonitor(Object h, Monitor* m) pure nothrow
+private void _setMonitor(Object h, Monitor* m) pure nothrow
 {
     h.__monitor = m;
 }
@@ -1821,16 +1821,17 @@ body
     ownee.__monitor = owner.__monitor;
 }
 
-extern (C) void _d_monitor_create(Object) nothrow;
-extern (C) void _d_monitor_destroy(Object) nothrow;
-extern (C) void _d_monitor_lock(Object) nothrow;
-extern (C) int  _d_monitor_unlock(Object) nothrow;
+// need to fake purity here to not break code
+extern (C) void _d_monitor_create(Object) pure nothrow;
+extern (C) void _d_monitor_destroy(Object) pure nothrow;
+extern (C) void _d_monitor_lock(Object) pure nothrow;
+extern (C) int  _d_monitor_unlock(Object) pure nothrow;
 
 extern (C) void _d_monitordelete(Object h, bool det)
 {
     // det is true when the object is being destroyed deterministically (ie.
     // when it is explicitly deleted or is a scope object whose time is up).
-    Monitor* m = getMonitor(h);
+    Monitor* m = _getMonitor(h);
 
     if (m !is null)
     {
@@ -1842,7 +1843,7 @@ extern (C) void _d_monitordelete(Object h, bool det)
             {
                 _d_monitor_devt(m, h);
                 _d_monitor_destroy(h);
-                setMonitor(h, null);
+                _setMonitor(h, null);
             }
             return;
         }
@@ -1856,18 +1857,18 @@ extern (C) void _d_monitordelete(Object h, bool det)
             GC.free(cast(void*)i);
         }
         +/
-        setMonitor(h, null);
+        _setMonitor(h, null);
     }
 }
 
 extern (C) void _d_monitorenter(Object h) nothrow
 {
-    Monitor* m = getMonitor(h);
+    Monitor* m = _getMonitor(h);
 
     if (m is null)
     {
         _d_monitor_create(h);
-        m = getMonitor(h);
+        m = _getMonitor(h);
     }
 
     IMonitor i = m.impl;
@@ -1882,7 +1883,7 @@ extern (C) void _d_monitorenter(Object h) nothrow
 
 extern (C) void _d_monitorexit(Object h) nothrow
 {
-    Monitor* m = getMonitor(h);
+    Monitor* m = _getMonitor(h);
     IMonitor i = m.impl;
 
     if (i is null)
@@ -1891,6 +1892,65 @@ extern (C) void _d_monitorexit(Object h) nothrow
         return;
     }
     i.unlock();
+}
+
+
+void _synchronized_lock(T)(T mtx)
+    if (__traits(compiles, mtx.lock()))
+{
+    // Check that mutex like objects (lock/unlock) don't have a different monitor set.
+    // This would fail if code relied on the old synchronized (obj) semantic.
+    static if (is(T : Object))
+    {
+        Monitor *m;
+        // monitor is allowed to be set to mtx itself
+        static if (is(T : Object.Monitor))
+            assert((m = _getMonitor(mtx)) is null || m.impl is mtx);
+        else
+            assert(_getMonitor(mtx) is null);
+    }
+    mtx.lock();
+}
+
+void _synchronized_unlock(T)(T mtx)
+    if (__traits(compiles, mtx.unlock()))
+{
+    mtx.unlock();
+}
+
+// Old monitor based synchronization for objects.
+
+void _synchronized_lock(T)(T obj)
+    if (is(T : Object) && !__traits(compiles, obj.lock()))
+{
+    _d_monitorenter(obj);
+}
+
+void _synchronized_unlock(T)(T obj)
+    if (is(T : Object) && !__traits(compiles, obj.unlock()))
+{
+    _d_monitorexit(obj);
+}
+
+pure nothrow unittest
+{
+    static class CMutex : IMonitor
+    {
+        void lock() pure nothrow {}
+        void unlock() pure nothrow {}
+    }
+
+    auto cmtx = new CMutex();
+    synchronized (cmtx) {}
+
+    static struct SMutex
+    {
+        void lock() pure nothrow {}
+        void unlock() pure nothrow {}
+    }
+
+    SMutex smtx;
+    synchronized (smtx) {}
 }
 
 extern (C) void _d_monitor_devt(Monitor* m, Object h)
@@ -1917,7 +1977,7 @@ extern (C) void rt_attachDisposeEvent(Object h, DEvent e)
 {
     synchronized (h)
     {
-        Monitor* m = getMonitor(h);
+        Monitor* m = _getMonitor(h);
         assert(m.impl is null);
 
         foreach (ref v; m.devt)
@@ -1945,7 +2005,7 @@ extern (C) void rt_detachDisposeEvent(Object h, DEvent e)
 {
     synchronized (h)
     {
-        Monitor* m = getMonitor(h);
+        Monitor* m = _getMonitor(h);
         assert(m.impl is null);
 
         foreach (p, v; m.devt)

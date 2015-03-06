@@ -77,7 +77,67 @@ bool opEquals(Object lhs, Object rhs)
     return lhs.opEquals(rhs) && rhs.opEquals(lhs);
 }
 
+// NOTE: The dtor callback feature is only supported for monitors that are not
+//       supplied by the user.  The assumption is that any object with a user-
+//       supplied monitor may have special storage or lifetime requirements and
+//       that as a result, storing references to local objects within Monitor
+//       may not be safe or desirable.  Thus, devt is only valid if impl is
+//       null.
+private struct Monitor
+{
+    Object.Monitor impl;
+    /* !!! more internal fields follow, only use by ref */
+}
+
+private Monitor* _getMonitor(Object h) @trusted pure nothrow
+{
+    return cast(Monitor*) h.__monitor;
+}
+
 void setSameMutex(shared Object ownee, shared Object owner);
+
+
+extern (C) void _d_monitorenter(Object h) nothrow;
+extern (C) void _d_monitorexit(Object h) nothrow;
+
+
+void _synchronized_lock(T)(T mtx) @safe
+    if (__traits(compiles, mtx.lock()))
+{
+    // Check that mutex like objects (lock/unlock) don't have a different monitor set.
+    // This would fail if code relied on the old synchronized (obj) semantic.
+    static if (is(T : Object))
+    {
+        Monitor *m;
+        // monitor is allowed to be set to mtx itself
+        static if (is(T : Object.Monitor))
+            assert((m = _getMonitor(mtx)) is null || m.impl is mtx);
+        else
+            assert(_getMonitor(mtx) is null);
+    }
+    mtx.lock();
+}
+
+void _synchronized_unlock(T)(T mtx) @safe
+    if (__traits(compiles, mtx.unlock()))
+{
+    mtx.unlock();
+}
+
+// Old monitor based synchronization for objects.
+
+void _synchronized_lock(T)(T obj)
+    if (is(T : Object) && !__traits(compiles, obj.lock()))
+{
+    _d_monitorenter(obj);
+}
+
+void _synchronized_unlock(T)(T obj)
+    if (is(T : Object) && !__traits(compiles, obj.unlock()))
+{
+    _d_monitorexit(obj);
+}
+
 
 struct Interface
 {
