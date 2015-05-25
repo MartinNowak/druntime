@@ -19,7 +19,7 @@ import core.stdc.stdlib;
 
 private
 {
-    __gshared GC _gc;
+    TCGC _gc;
 
     static import core.memory;
     alias BlkInfo = core.memory.GC.BlkInfo;
@@ -126,6 +126,16 @@ extern (C)
                                   // static data area, roots, and ranges.
         thread_term();
 
+        _gc.Dtor();
+    }
+
+    void gc_tls_init()
+    {
+        _gc.initialize();
+    }
+
+    void gc_tls_term()
+    {
         _gc.Dtor();
     }
 

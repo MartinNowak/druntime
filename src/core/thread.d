@@ -30,6 +30,9 @@ private
 
     alias rt_tlsgc_processGCMarks =
         externDFunc!("rt.tlsgc.processGCMarks", void function(void*, scope IsMarkedDg) nothrow);
+
+    extern(C) void gc_tls_init();
+    extern(C) void gc_tls_term();
 }
 
 version( Solaris )
@@ -181,6 +184,7 @@ version( Windows )
 
             try
             {
+                gc_tls_init();
                 rt_moduleTlsCtor();
                 try
                 {
@@ -191,6 +195,7 @@ version( Windows )
                     append( t );
                 }
                 rt_moduleTlsDtor();
+                gc_tls_term();
             }
             catch( Throwable t )
             {
@@ -330,6 +335,7 @@ else version( Posix )
             try
             {
                 version (Shared) inheritLoadedLibraries(loadedLibraries);
+                gc_tls_init();
                 rt_moduleTlsCtor();
                 try
                 {
@@ -340,6 +346,7 @@ else version( Posix )
                     append( t );
                 }
                 rt_moduleTlsDtor();
+                gc_tls_term();
                 version (Shared) cleanupLoadedLibraries();
             }
             catch( Throwable t )

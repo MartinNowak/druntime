@@ -149,6 +149,8 @@ private
 
 alias GC gc_t;
 
+private void swap(T)(ref T a, ref T b) { auto c = a; a = b; b = c; }
+
 
 /* ======================= Leak Detector =========================== */
 
@@ -270,6 +272,139 @@ final class GCMutex : Mutex
     }
 }
 
+// thread cache
+struct TCGC
+{
+nothrow:
+    void initialize()
+    {
+        import core.atomic;
+        if (atomicOp!"+="(_initCount, 1) == 1)
+            _gc.initialize();
+        _trace[] = B_MAX;
+        _gc.addTCGC(&this);
+    }
+
+    void Dtor()
+    {
+        import core.atomic;
+        _gc.removeTCGC(&this);
+        if (atomicOp!"-="(_initCount, 1) == 0)
+            _gc.Dtor();
+    }
+
+    void *malloc(size_t size, uint bits = 0, size_t *alloc_size = null, const TypeInfo ti = null) nothrow
+    {
+        immutable bin = size <= 2048 ? Gcx.binTable[size] : B_PAGE;
+        countAlloc(bin);
+        if (bin >= B_PAGE)
+            return _gc.malloc(size, bits, alloc_size, ti);
+
+        if (_bins[bin] is null)
+            _bins[bin] = _gc.allocCache(bin, _count[bin]);
+
+        auto res = _bins[bin];
+        _bins[bin] = res.next;
+        if (alloc_size)
+            *alloc_size = binsize[bin];
+        if (bits) setAttr(res, bits);
+        return res;
+    }
+
+    uint setAttr(void* p, uint v) nothrow
+    {
+        if (auto blk = _blkInfoCache.find(p))
+            return blk.attr |= v;
+        else
+            return _gc.setAttr(p, v);
+    }
+
+    uint clrAttr(void* p, uint v) nothrow
+    {
+        if (auto blk = _blkInfoCache.find(p))
+            return blk.attr &= ~v;
+        else
+            return _gc.clrAttr(p, v);
+    }
+
+    uint getAttr(void* p) nothrow
+    {
+        if (auto blk = _blkInfoCache.find(p))
+            return blk.attr;
+        else
+            return _gc.getAttr(p);
+    }
+
+    BlkInfo query(void* p) nothrow
+    {
+        if (auto blk = _blkInfoCache.find(p))
+            return *blk;
+        else
+            return _gc.query(p);
+    }
+
+    static shared size_t _initCount;
+    __gshared GC _gc;
+    alias _gc this;
+
+private:
+    // count which size classes are used most often
+    void countAlloc(Bins bin)
+    {
+        if (bin < B_PAGE)
+            ++_count[bin];
+        swap(_trace[_tracei++ % _trace.length], bin);
+        if (bin < B_PAGE)
+            --_count[bin];
+    }
+
+    static struct BlkInfoCache
+    {
+    nothrow:
+        BlkInfo* find(void* p)
+        {
+            foreach (ref info; _infos[0 .. n])
+            {
+                if (info.base <= p && p < info.base + info.size)
+                    return &info;
+            }
+            return null;
+        }
+
+        void add(BlkInfo info)
+        {
+            if (n == _infos.length)
+                flush();
+            _infos[n++] = info;
+        }
+
+        void remove(void* p)
+        {
+            if (auto pinfo = find(p))
+            {
+                swap(*pinfo, _infos[n - 1]);
+                --n;
+            }
+        }
+
+    private:
+        void flush()
+        {
+            _gc.setAttrs(_infos[0 .. n]);
+            n = 0;
+        }
+
+        size_t n;
+        BlkInfo[8] _infos;
+    }
+
+    Bins[64] _trace;
+    List*[B_PAGE] _bins;
+    BlkInfoCache _blkInfoCache;
+    ubyte[B_PAGE] _count;
+    size_t _tracei;
+}
+
 struct GC
 {
     // For passing to debug code (not thread safe)
@@ -287,7 +422,7 @@ struct GC
 
     __gshared Config config;
 
-    void initialize()
+    void initialize() nothrow
     {
         config.initialize();
 
@@ -306,7 +441,7 @@ struct GC
     }
 
 
-    void Dtor()
+    void Dtor() nothrow
     {
         version (linux)
         {
@@ -322,6 +457,19 @@ struct GC
         }
     }
 
+    void addTCGC(TCGC* tcgc) nothrow
+    {
+        gcLock.lock();
+        gcx.addTCGC(tcgc);
+        gcLock.unlock();
+    }
+
+    void removeTCGC(TCGC* tcgc) nothrow
+    {
+        gcLock.lock();
+        gcx.removeTCGC(tcgc);
+        gcLock.unlock();
+    }
 
     /**
      *
@@ -412,6 +560,19 @@ struct GC
         return rc;
     }
 
+    void setAttrs(BlkInfo[] infos) nothrow
+    {
+        gcLock.lock();
+        foreach (ref info; infos)
+        {
+            auto pool = gcx.findPool(info.base);
+            if (pool is null) continue;
+
+            immutable biti = cast(size_t)(info.base - pool.baseAddr) >> pool.shiftBy;
+            pool.setBits(biti, info.attr);
+        }
+        gcLock.unlock();
+    }
 
     /**
      *
@@ -445,6 +606,20 @@ struct GC
         return rc;
     }
 
+    List* allocCache(Bins bin, size_t count) nothrow
+    {
+        assert(count);
+
+        gcLock.lock();
+        size_t dummy=void;
+        List* res = cast(List*)gcx.smallAlloc(bin, dummy, 0);
+        auto p = res;
+        for (; --count; p = p.next)
+            p.next = cast(List*)gcx.smallAlloc(bin, dummy, 0);
+        p.next = null;
+        gcLock.unlock();
+        return res;
+    }
 
     /**
      *
@@ -1433,13 +1608,17 @@ struct Gcx
 
     List*[B_PAGE] bucket; // free list for each small size
 
+    // array of all thread caches
+    TCGC** _tcgcs;
+    size_t _ntcgc;
+
     // run a collection when reaching those thresholds (number of used pages)
     float smallCollectThreshold, largeCollectThreshold;
     uint usedSmallPages, usedLargePages;
     // total number of mapped pages
     uint mappedPages;
 
-    void initialize()
+    void initialize() nothrow
     {
         (cast(byte*)&this)[0 .. Gcx.sizeof] = 0;
         log_init();
@@ -1453,7 +1632,7 @@ struct Gcx
     }
 
 
-    void Dtor()
+    void Dtor() nothrow
     {
         if (GC.config.profile)
         {
@@ -1543,6 +1722,21 @@ struct Gcx
         }
     }
 
+
+    void addTCGC(TCGC* tcgc) nothrow
+    {
+        _tcgcs = cast(TCGC**)cstdlib.realloc(_tcgcs, (_ntcgc + 1) * _tcgcs[0].sizeof);
+        _tcgcs[_ntcgc++] = tcgc;
+    }
+
+    void removeTCGC(TCGC* tcgc) nothrow
+    {
+        foreach (ref other; _tcgcs[0 .. _ntcgc])
+        {
+            if (other == tcgc)
+                return swap(other, _tcgcs[--_ntcgc]);
+        }
+    }
 
     /**
      *
@@ -1682,9 +1876,9 @@ struct Gcx
     /**
      * Computes the bin table using CTFE.
      */
-    static byte[2049] ctfeBins() nothrow
+    static Bins[2049] ctfeBins() nothrow
     {
-        byte[2049] ret;
+        Bins[2049] ret;
         size_t p = 0;
         for (Bins b = B_16; b <= B_2048; b++)
             for ( ; p <= binsize[b]; p++)
@@ -1693,7 +1887,7 @@ struct Gcx
         return ret;
     }
 
-    static const byte[2049] binTable = ctfeBins();
+    static const Bins[2049] binTable = ctfeBins();
 
     /**
      * Allocate a new pool of at least size bytes.
@@ -2198,6 +2392,20 @@ struct Gcx
             if(!pool.isLargeObject)
             {
                 pool.mark.copy(&pool.freebits);
+            }
+        }
+
+        // mark entries in thread caches
+        foreach (tcgc; _tcgcs[0 .. _ntcgc])
+        {
+            foreach (list; tcgc._bins)
+            {
+                for (; list; list = list.next)
+                {
+                    pool = list.pool;
+                    assert(pool);
+                    pool.mark.set(cast(size_t)(cast(byte*)list - pool.baseAddr) / 16);
+                }
             }
         }
     }
