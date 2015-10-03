@@ -16,7 +16,7 @@ module core.demangle;
 debug(trace) import core.stdc.stdio : printf;
 debug(info) import core.stdc.stdio : printf;
 
-private struct Demangle
+private struct Demangler
 {
     // NOTE: This implementation currently only works with mangled function
     //       names as they exist in an object file.  Type names mangled via
@@ -1658,7 +1658,8 @@ private struct Demangle
         }
     }
 
-    char[] demangleName()
+    static void demangleName(const(char)[] buf, scope OutputRange range)
+        if (__traits(compiles, _doPut(range, "abcde")))
     {
         return doDemangle!parseMangledName();
     }
@@ -1676,35 +1677,81 @@ private struct Demangle
  *
  * Params:
  *  buf = The string to demangle.
+ *  range = An output range.
  *  dst = An optional destination buffer.
  *
  * Returns:
  *  The demangled name or the original string if the name is not a mangled D
  *  name.
  */
-char[] demangle( const(char)[] buf, char[] dst = null )
+void demangle(const(char)[] buf, scope OutputRange range)
+    if (__traits(compiles, _doPut(range, "abcde")))
 {
-    //return Demangle(buf, dst)();
-    auto d = Demangle(buf, dst);
-    return d.demangleName();
+    if (!checkMangledName(buf))
+        return;
+    Demangler.demangleName(buf, range);
 }
 
+/// ditto
+char[] demangle(const(char)[] buf, char[] dst = null)
+{
+    if (!checkMangledName(buf))
+    {
+        if (dst.length < buf.length)
+            dst.length = buf.length;
+        dst[0 .. buf.length] = buf[];
+        return dst[0 .. buf.length];
+    }
+
+    size_t idx;
+    Demangler.demangle(buf, (part) {
+        if (idx + part.length > dst.length)
+            dst.length = idx + part.length;
+        dst[idx .. idx + part.length] = part[];
+        idx += part.length;
+    });
+    return dst[0 .. idx];
+}
 
 /**
  * Demangles a D mangled type.
  *
  * Params:
  *  buf = The string to demangle.
+ *  range = An output range.
  *  dst = An optional destination buffer.
  *
  * Returns:
  *  The demangled type name or the original string if the name is not a
  *  mangled D type.
 */
-char[] demangleType( const(char)[] buf, char[] dst = null )
+void demangleType(const(char)[] buf, scope OutputRange range)
+    if (__traits(compiles, _doPut(range, "abcde")))
 {
-    auto d = Demangle(buf, dst);
-    return d.demangleType();
+    if (!checkType(buf))
+        return;
+    Demangler.demangleType(buf, range);
+}
+
+/// ditto
+char[] demangleType(const(char)[] buf, char[] dst = null)
+{
+    if (!checkType(buf))
+    {
+        if (dst.length < buf.length)
+            dst.length = buf.length;
+        dst[0 .. buf.length] = buf[];
+        return dst[0 .. buf.length];
+    }
+
+    size_t idx;
+    Demangler.demangleType(buf, (part) {
+        if (idx + part.length > dst.length)
+            dst.length = idx + part.length;
+        dst[idx .. idx + part.length] = part[];
+        idx += part.length;
+    });
+    return dst[0 .. idx];
 }
 
 

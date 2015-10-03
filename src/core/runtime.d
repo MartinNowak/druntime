@@ -33,33 +33,18 @@ private
 {
     alias bool function() ModuleUnitTester;
     alias bool function(Object) CollectHandler;
-    alias Throwable.TraceInfo function( void* ptr ) TraceHandler;
 
     extern (C) void rt_setCollectHandler( CollectHandler h );
     extern (C) CollectHandler rt_getCollectHandler();
 
-    extern (C) void rt_setTraceHandler( TraceHandler h );
-    extern (C) TraceHandler rt_getTraceHandler();
-
     alias void delegate( Throwable ) ExceptionHandler;
     extern (C) void _d_print_throwable(Throwable t);
 
-    extern (C) void* thread_stackBottom();
+    extern (C) void* thread_stackBottom() nothrow @nogc;
 
     extern (C) string[] rt_args();
     extern (C) CArgs rt_cArgs();
 }
-
-
-static this()
-{
-    // NOTE: Some module ctors will run before this handler is set, so it's
-    //       still possible the app could exit without a stack trace.  If
-    //       this becomes an issue, the handler could be set in C main
-    //       before the module ctors are run.
-    Runtime.traceHandler = &defaultTraceHandler;
-}
-
 
 ///////////////////////////////////////////////////////////////////////////////
 // Runtime
@@ -241,6 +226,7 @@ struct Runtime
      * Params:
      *  h = The new trace handler.  Set to null to use the default handler.
      */
+    deprecated("Use tracePrinter instead.")
     static @property void traceHandler( TraceHandler h )
     {
         rt_setTraceHandler( h );
@@ -252,10 +238,36 @@ struct Runtime
      * Returns:
      *  The current trace handler or null if none has been set.
      */
+    deprecated("Use tracePrinter instead.")
     static @property TraceHandler traceHandler()
     {
         return rt_getTraceHandler();
     }
+
+    /**
+     * Callback type for stack trace printer.
+     *
+     * Params:
+     *  callstack = callstack to print
+     *  print = printing function
+     */
+    alias TracePrinter = void function(in void*[] callstack,
+        scope void delegate(in char[]) nothrow @nogc print) nothrow @nogc;
+
+    /**
+     * Get/set the stack trace printer (affects the whole process).
+     */
+    static void tracePrinter(TracePrinter tp)
+    {
+        _tracePrinter = tp;
+    }
+    /// ditto
+    static TracePrinter tracePrinter()
+    {
+        return _tracePrinter;
+    }
+
+    private __gshared TracePrinter _tracePrinter = &defaultTracePrinter;
 
     /**
      * Overrides the default collect hander with a user-supplied version.  This
@@ -385,6 +397,36 @@ extern (C) void trace_setdeffilename(string name);
 extern (C) void profilegc_setlogfilename(string name);
 
 ///////////////////////////////////////////////////////////////////////////////
+// Tracehandler
+///////////////////////////////////////////////////////////////////////////////
+
+private __gshared TraceHandler _traceHandler = null;
+
+// Trace handler
+deprecated("Use TracePrinter instead.")
+alias TraceHandler = Throwable.TraceInfo function(void* ptr);
+
+/*
+ * Overrides the default trace hander with a user-supplied version.
+ *
+ * Params:
+ *  h = The new trace handler.  Set to null to use the default handler.
+ */
+deprecated("Use TracePrinter instead.")
+extern (C) void  rt_setTraceHandler(TraceHandler h)
+{
+    _traceHandler = h;
+}
+
+// Return the current trace handler
+deprecated("Use TracePrinter instead.")
+extern (C) TraceHandler rt_getTraceHandler()
+{
+    return _traceHandler;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
 // Overridable Callbacks
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -476,281 +518,167 @@ extern (C) bool runModuleUnitTests()
 // Default Implementations
 ///////////////////////////////////////////////////////////////////////////////
 
+private:
 
-/**
- *
- */
-Throwable.TraceInfo defaultTraceHandler( void* ptr = null )
+immutable(size_t)[] createStackTrace() nothrow @nogc
 {
-    // backtrace
-    version( CRuntime_Glibc )
-        import core.sys.linux.execinfo;
-    else version( OSX )
-        import core.sys.osx.execinfo;
-    else version( FreeBSD )
-        import core.sys.freebsd.execinfo;
-    else version( Windows )
-        import core.sys.windows.stacktrace;
-    else version( Solaris )
-        import core.sys.solaris.execinfo;
-
-    //printf("runtime.defaultTraceHandler()\n");
-    static if( __traits( compiles, backtrace ) )
+    version (Posix)
     {
-        import core.demangle;
-        import core.stdc.stdlib : free;
-        import core.stdc.string : strlen, memchr, memmove;
-
-        class DefaultTraceInfo : Throwable.TraceInfo
+        static void** getBasePtr() pure nothrow @nogc
         {
-            this()
-            {
-                numframes = 0; //backtrace( callstack, MAXFRAMES );
-                if (numframes < 2) // backtrace() failed, do it ourselves
-                {
-                    static void** getBasePtr()
-                    {
-                        version( D_InlineAsm_X86 )
-                            asm { naked; mov EAX, EBP; ret; }
-                        else
-                        version( D_InlineAsm_X86_64 )
-                            asm { naked; mov RAX, RBP; ret; }
-                        else
-                            return null;
-                    }
-
-                    auto  stackTop    = getBasePtr();
-                    auto  stackBottom = cast(void**) thread_stackBottom();
-                    void* dummy;
-
-                    if( stackTop && &dummy < stackTop && stackTop < stackBottom )
-                    {
-                        auto stackPtr = stackTop;
-
-                        for( numframes = 0; stackTop <= stackPtr &&
-                                            stackPtr < stackBottom &&
-                                            numframes < MAXFRAMES; )
-                        {
-                            enum CALL_INSTRUCTION_SIZE = 1; // it may not be 1 but it is good enough to get
-                                                            // in CALL instruction address range for backtrace
-                            callstack[numframes++] = *(stackPtr + 1) - CALL_INSTRUCTION_SIZE;
-                            stackPtr = cast(void**) *stackPtr;
-                        }
-                    }
-                }
-            }
-
-            override int opApply( scope int delegate(ref const(char[])) dg ) const
-            {
-                return opApply( (ref size_t, ref const(char[]) buf)
-                                {
-                                    return dg( buf );
-                                } );
-            }
-
-            override int opApply( scope int delegate(ref size_t, ref const(char[])) dg ) const
-            {
-                version(Posix)
-                {
-                    // NOTE: The first 4 frames with the current implementation are
-                    //       inside core.runtime and the object code, so eliminate
-                    //       these for readability.  The alternative would be to
-                    //       exclude the first N frames that are in a list of
-                    //       mangled function names.
-                    enum FIRSTFRAME = 4;
-                }
-                else version(Windows)
-                {
-                    // NOTE: On Windows, the number of frames to exclude is based on
-                    //       whether the exception is user or system-generated, so
-                    //       it may be necessary to exclude a list of function names
-                    //       instead.
-                    enum FIRSTFRAME = 0;
-                }
-
-                version(linux) enum enableDwarf = true;
-                else version(FreeBSD) enum enableDwarf = true;
-                else enum enableDwarf = false;
-
-                static if (enableDwarf)
-                {
-                    import core.internal.traits : externDFunc;
-
-                    alias traceHandlerOpApplyImpl = externDFunc!(
-                        "rt.backtrace.dwarf.traceHandlerOpApplyImpl",
-                        int function(const void*[], scope int delegate(ref size_t, ref const(char[])))
-                    );
-
-                    if (numframes >= FIRSTFRAME)
-                    {
-                        return traceHandlerOpApplyImpl(
-                            callstack[FIRSTFRAME .. numframes],
-                            dg
-                        );
-                    }
-                    else
-                    {
-                        return 0;
-                    }
-                }
-                else
-                {
-                    const framelist = backtrace_symbols( callstack.ptr, numframes );
-                    scope(exit) free(cast(void*) framelist);
-
-                    int ret = 0;
-                    for( int i = FIRSTFRAME; i < numframes; ++i )
-                    {
-                        char[4096] fixbuf;
-                        auto buf = framelist[i][0 .. strlen(framelist[i])];
-                        auto pos = cast(size_t)(i - FIRSTFRAME);
-                        buf = fixline( buf, fixbuf );
-                        ret = dg( pos, buf );
-                        if( ret )
-                            break;
-                    }
-                    return ret;
-                }
-
-            }
-
-            override string toString() const
-            {
-                string buf;
-                foreach( i, line; this )
-                    buf ~= i ? "\n" ~ line : line;
-                return buf;
-            }
-
-        private:
-            int     numframes;
-            static enum MAXFRAMES = 128;
-            void*[MAXFRAMES]  callstack = void;
-
-        private:
-            const(char)[] fixline( const(char)[] buf, return ref char[4096] fixbuf ) const
-            {
-                size_t symBeg, symEnd;
-                version( OSX )
-                {
-                    // format is:
-                    //  1  module    0x00000000 D6module4funcAFZv + 0
-                    for( size_t i = 0, n = 0; i < buf.length; i++ )
-                    {
-                        if( ' ' == buf[i] )
-                        {
-                            n++;
-                            while( i < buf.length && ' ' == buf[i] )
-                                i++;
-                            if( 3 > n )
-                                continue;
-                            symBeg = i;
-                            while( i < buf.length && ' ' != buf[i] )
-                                i++;
-                            symEnd = i;
-                            break;
-                        }
-                    }
-                }
-                else version( CRuntime_Glibc )
-                {
-                    // format is:  module(_D6module4funcAFZv) [0x00000000]
-                    // or:         module(_D6module4funcAFZv+0x78) [0x00000000]
-                    auto bptr = cast(char*) memchr( buf.ptr, '(', buf.length );
-                    auto eptr = cast(char*) memchr( buf.ptr, ')', buf.length );
-                    auto pptr = cast(char*) memchr( buf.ptr, '+', buf.length );
-
-                    if (pptr && pptr < eptr)
-                        eptr = pptr;
-
-                    if( bptr++ && eptr )
-                    {
-                        symBeg = bptr - buf.ptr;
-                        symEnd = eptr - buf.ptr;
-                    }
-                }
-                else version( FreeBSD )
-                {
-                    // format is: 0x00000000 <_D6module4funcAFZv+0x78> at module
-                    auto bptr = cast(char*) memchr( buf.ptr, '<', buf.length );
-                    auto eptr = cast(char*) memchr( buf.ptr, '+', buf.length );
-
-                    if( bptr++ && eptr )
-                    {
-                        symBeg = bptr - buf.ptr;
-                        symEnd = eptr - buf.ptr;
-                    }
-                }
-                else version( Solaris )
-                {
-                    // format is object'symbol+offset [pc]
-                    auto bptr = cast(char*) memchr( buf.ptr, '\'', buf.length );
-                    auto eptr = cast(char*) memchr( buf.ptr, '+', buf.length );
-
-                    if( bptr++ && eptr )
-                    {
-                        symBeg = bptr - buf.ptr;
-                        symEnd = eptr - buf.ptr;
-                    }
-                }
-                else
-                {
-                    // fallthrough
-                }
-
-                assert(symBeg < buf.length && symEnd < buf.length);
-                assert(symBeg <= symEnd);
-
-                enum min = (size_t a, size_t b) => a <= b ? a : b;
-                if (symBeg == symEnd || symBeg >= fixbuf.length)
-                {
-                    immutable len = min(buf.length, fixbuf.length);
-                    fixbuf[0 .. len] = buf[0 .. len];
-                    return fixbuf[0 .. len];
-                }
-                else
-                {
-                    fixbuf[0 .. symBeg] = buf[0 .. symBeg];
-
-                    auto sym = demangle(buf[symBeg .. symEnd], fixbuf[symBeg .. $]);
-
-                    if (sym.ptr !is fixbuf.ptr + symBeg)
-                    {
-                        // demangle reallocated the buffer, copy the symbol to fixbuf
-                        immutable len = min(fixbuf.length - symBeg, sym.length);
-                        memmove(fixbuf.ptr + symBeg, sym.ptr, len);
-                        if (symBeg + len == fixbuf.length)
-                            return fixbuf[];
-                    }
-
-                    immutable pos = symBeg + sym.length;
-                    assert(pos < fixbuf.length);
-                    immutable tail = buf.length - symEnd;
-                    immutable len = min(fixbuf.length - pos, tail);
-                    fixbuf[pos .. pos + len] = buf[symEnd .. symEnd + len];
-                    return fixbuf[0 .. pos + len];
-                }
-            }
+            version( D_InlineAsm_X86 )
+                asm pure nothrow @nogc { naked; mov EAX, EBP; ret; }
+            else
+                version( D_InlineAsm_X86_64 )
+                    asm pure nothrow @nogc { naked; mov RAX, RBP; ret; }
+            else
+                return null;
         }
 
-        return new DefaultTraceInfo;
+        auto stackTop = getBasePtr();
+        auto stackBottom = cast(void**)thread_stackBottom();
+        void* dummy;
+
+        if (stackTop is null || &dummy >= stackTop || stackTop >= stackBottom)
+            return null;
+
+        auto callstack = malloc(MAXFRAMES * (void*).sizeof);
+        if (callstack is null)
+            return null;
+
+        auto ptr = stackTop;
+        size_t n;
+        auto skip = 4; // within druntime
+        while (ptr >= stackTop && ptr < stackBottom && n < MAXFRAMES)
+        {
+            enum CALL_INSTRUCTION_SIZE = 1; // it may not be 1 but it is good enough to get
+            // into CALL instruction address range for backtrace
+            auto returnAddr = cast(size_t)*(ptr + 1);
+            if (skip)
+                --skip;
+            else
+                callstack[n++] = returnAddr - CALL_INSTRUCTION_SIZE;
+            ptr = cast(void**)*ptr;
+        }
     }
-    else static if( __traits( compiles, new StackTrace(0, null) ) )
+    else version (Windows)
     {
         version (Win64)
-        {
             static enum FIRSTFRAME = 4;
-        }
         else version (Win32)
-        {
             static enum FIRSTFRAME = 0;
-        }
-        import core.sys.windows.windows : CONTEXT;
-        auto s = new StackTrace(FIRSTFRAME, cast(CONTEXT*)ptr);
-        return s;
-    }
-    else
-    {
-        return null;
+        import core.sys.windows.stacktrace : createStackTrace;
+        return createStackTrace(FIRSTFRAME, null);
     }
 }
+
+version (linux)
+    alias defaultTracePrinter = externDFunc!("rt.backtrace.dwarf.tracePrinter", TracePrinter);
+else version (FreeBSD)
+    alias defaultTracePrinter = externDFunc!("rt.backtrace.dwarf.tracePrinter", TracePrinter);
+else version (Windows)
+{
+    static import core.sys.windows.stacktrace;
+    alias defaultTracePrinter = core.sys.windows.stacktrace.tracePrinter;
+}
+else version (Posix)
+{
+    void defaultTracePrinter(immutable(size_t)[] callstack,
+        scope void delegate(in char[]) nothrow @nogc print) nothrow @nogc
+    {
+        const symbols = backtrace_symbols(callstack.ptr, callstack.length);
+        if (symbols is null)
+            return;
+        scope(exit) free(cast(void*)symbols);
+
+        foreach (symbol; symbols[0 .. callstack.length])
+        {
+            auto str = symbol[0 .. strlen(symbol)];
+            demangleSym(str, print);
+        }
+    }
+
+    void demangleSym(const(char)[] buf,
+        scope void delegate(in char[]) nothrow @nogc print) nothrow @nogc
+    {
+        size_t symBeg, symEnd;
+        version (OSX)
+        {
+            // format is:
+            //  1  module    0x00000000 D6module4funcAFZv + 0
+            for (size_t i = 0, n = 0; i < buf.length; i++)
+            {
+                if (' ' == buf[i])
+                {
+                    n++;
+                    while (i < buf.length && ' ' == buf[i])
+                        i++;
+                    if (3 > n)
+                        continue;
+                    symBeg = i;
+                    while (i < buf.length && ' ' != buf[i])
+                        i++;
+                    symEnd = i;
+                    break;
+                }
+            }
+        }
+        else version (CRuntime_Glibc)
+        {
+            // format is:  module(_D6module4funcAFZv) [0x00000000]
+            // or:         module(_D6module4funcAFZv+0x78) [0x00000000]
+            auto bptr = cast(char*) memchr( buf.ptr, '(', buf.length );
+            auto eptr = cast(char*) memchr( buf.ptr, ')', buf.length );
+            auto pptr = cast(char*) memchr( buf.ptr, '+', buf.length );
+
+            if (pptr && pptr < eptr)
+                eptr = pptr;
+
+            if (bptr++ && eptr)
+            {
+                symBeg = bptr - buf.ptr;
+                symEnd = eptr - buf.ptr;
+            }
+        }
+        else version (FreeBSD)
+        {
+            // format is: 0x00000000 <_D6module4funcAFZv+0x78> at module
+            auto bptr = cast(char*) memchr( buf.ptr, '<', buf.length );
+            auto eptr = cast(char*) memchr( buf.ptr, '+', buf.length );
+
+            if (bptr++ && eptr)
+            {
+                symBeg = bptr - buf.ptr;
+                symEnd = eptr - buf.ptr;
+            }
+        }
+        else version (Solaris)
+        {
+            // format is object'symbol+offset [pc]
+            auto bptr = cast(char*) memchr( buf.ptr, '\'', buf.length );
+            auto eptr = cast(char*) memchr( buf.ptr, '+', buf.length );
+
+            if (bptr++ && eptr)
+            {
+                symBeg = bptr - buf.ptr;
+                symEnd = eptr - buf.ptr;
+            }
+        }
+        else
+        {
+            // fallthrough
+        }
+
+        assert(symBeg < buf.length && symEnd < buf.length);
+        assert(symBeg <= symEnd);
+
+        if (symBeg == symEnd)
+            return print(buf);
+
+        print(buf[0 .. symBeg]);
+        demangle(buf[symBeg .. symEnd], print);
+        print(buf[symEnd .. $]);
+    }
+}
+else
+    static assert(0, "unimplemented");

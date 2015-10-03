@@ -13,16 +13,17 @@ module rt.deh;
 
 extern (C)
 {
-    Throwable.TraceInfo _d_traceContext(void* ptr = null);
-    void _d_createTrace(Object o, void* context)
+    void _d_createTrace(Object o, void* context) /*nothrow @nogc*/
     {
         auto t = cast(Throwable) o;
 
-        if (t !is null && t.info is null &&
-            cast(byte*) t !is typeid(t).init.ptr)
-        {
-            t.info = _d_traceContext(context);
-        }
+        if (t is null || t.callstack !is null) // in case of rethrow
+            return;
+
+        if (Runtime.tracePrinter)
+            t.callstack = getCallStack(ptr);
+        else if (auto h = Runtime.traceHandler)
+            t.info = h(ptr);
     }
 }
 
@@ -34,4 +35,3 @@ else version (Posix)
     public import rt.deh_win64_posix;
 else
     static assert (0, "Unsupported architecture");
-

@@ -31,15 +31,18 @@ struct Location
     size_t address;
 }
 
-int traceHandlerOpApplyImpl(const void*[] callstack, scope int delegate(ref size_t, ref const(char[])) dg)
+void tracePrinter(immutable(size_t)[] callstack,
+    scope void delegate(in char[]) nothrow @nogc print) nothrow @nogc
 {
     import core.stdc.stdio : snprintf;
     version(linux) import core.sys.linux.execinfo : backtrace_symbols;
     else version(FreeBSD) import core.sys.freebsd.execinfo : backtrace_symbols;
     import core.sys.posix.stdlib : free;
 
-    const char** frameList = backtrace_symbols(callstack.ptr, cast(int) callstack.length);
-    scope(exit) free(cast(void*) frameList);
+    const symbols = backtrace_symbols(callstack.ptr, callstack.length);
+    if (symbols is null)
+        return;
+    scope(exit) free(cast(void*)symbols);
 
     // find address -> file, line mapping using dwarf debug_line
     ElfFile file;

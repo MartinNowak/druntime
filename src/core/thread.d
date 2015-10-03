@@ -117,7 +117,7 @@ private
      *         where the stack was last swapped out, or null when a fiber stack
      *         is switched in for the first time.
      */
-    extern(C) void* _d_eh_swapContext(void* newContext) nothrow;
+    extern(C) void* _d_eh_swapContext(void* newContext) nothrow @nogc;
 }
 
 
@@ -1145,7 +1145,7 @@ class Thread
      *  deleting this object is undefined.  If the current thread is not
      *  attached to the runtime, a null reference is returned.
      */
-    static Thread getThis() nothrow
+    static Thread getThis() nothrow @nogc
     {
         // NOTE: This function may not be called until thread_init has
         //       completed.  See thread_suspendAll for more information
@@ -1479,7 +1479,7 @@ private:
     ///////////////////////////////////////////////////////////////////////////
 
 
-    final void pushContext( Context* c ) nothrow
+    final void pushContext( Context* c ) nothrow @nogc
     in
     {
         assert( !c.within );
@@ -1492,7 +1492,7 @@ private:
     }
 
 
-    final void popContext() nothrow
+    final void popContext() nothrow @nogc
     in
     {
         assert( m_curr && m_curr.within );
@@ -1506,7 +1506,7 @@ private:
     }
 
 
-    final Context* topContext() nothrow
+    final Context* topContext() nothrow @nogc
     in
     {
         assert( m_curr );
@@ -3191,7 +3191,7 @@ body
  * Returns:
  *  The address of the stack bottom.
  */
-extern (C) void* thread_stackBottom() nothrow
+extern (C) void* thread_stackBottom() nothrow @nogc
 in
 {
     assert(Thread.getThis());

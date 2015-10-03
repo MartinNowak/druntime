@@ -130,107 +130,6 @@ public:
     }
 
 private:
-    ulong[] m_trace;
-
-
-    static ulong[] traceNoSync(size_t skip, CONTEXT* context)
-    {
-        auto dbghelp  = DbgHelp.get();
-        if(dbghelp is null)
-            return []; // dbghelp.dll not available
-
-        if(RtlCaptureStackBackTrace !is null && context is null)
-        {
-            size_t[63] buffer = void; // On windows xp the sum of "frames to skip" and "frames to capture" can't be greater then 63
-            auto backtraceLength = RtlCaptureStackBackTrace(cast(ULONG)skip, cast(ULONG)(buffer.length - skip), cast(void**)buffer.ptr, null);
-
-            // If we get a backtrace and it does not have the maximum length use it.
-            // Otherwise rely on tracing through StackWalk64 which is slower but works when no frame pointers are available.
-            if(backtraceLength > 1 && backtraceLength < buffer.length - skip)
-            {
-                debug(PRINTF) printf("Using result from RtlCaptureStackBackTrace\n");
-                version(Win64)
-                {
-                    return buffer[0..backtraceLength].dup;
-                }
-                else version(Win32)
-                {
-                    auto result = new ulong[backtraceLength];
-                    foreach(i, ref e; result)
-                    {
-                        e = buffer[i];
-                    }
-                    return result;
-                }
-            }
-        }
-
-        HANDLE       hThread  = GetCurrentThread();
-        HANDLE       hProcess = GetCurrentProcess();
-        CONTEXT      ctxt;
-
-        if(context is null)
-        {
-            ctxt.ContextFlags = CONTEXT_FULL;
-            RtlCaptureContext(&ctxt);
-        }
-        else
-        {
-            ctxt = *context;
-        }
-
-        //x86
-        STACKFRAME64 stackframe;
-        with (stackframe)
-        {
-            version(X86)
-            {
-                enum Flat = ADDRESS_MODE.AddrModeFlat;
-                AddrPC.Offset    = ctxt.Eip;
-                AddrPC.Mode      = Flat;
-                AddrFrame.Offset = ctxt.Ebp;
-                AddrFrame.Mode   = Flat;
-                AddrStack.Offset = ctxt.Esp;
-                AddrStack.Mode   = Flat;
-            }
-        else version(X86_64)
-            {
-                enum Flat = ADDRESS_MODE.AddrModeFlat;
-                AddrPC.Offset    = ctxt.Rip;
-                AddrPC.Mode      = Flat;
-                AddrFrame.Offset = ctxt.Rbp;
-                AddrFrame.Mode   = Flat;
-                AddrStack.Offset = ctxt.Rsp;
-                AddrStack.Mode   = Flat;
-            }
-        }
-
-        version (X86)         enum imageType = IMAGE_FILE_MACHINE_I386;
-        else version (X86_64) enum imageType = IMAGE_FILE_MACHINE_AMD64;
-        else                  static assert(0, "unimplemented");
-
-        ulong[] result;
-        size_t frameNum = 0;
-
-        // do ... while so that we don't skip the first stackframe
-        do
-        {
-            if( stackframe.AddrPC.Offset == stackframe.AddrReturn.Offset )
-            {
-                debug(PRINTF) printf("Endless callstack\n");
-                break;
-            }
-            if(frameNum >= skip)
-            {
-                result ~= stackframe.AddrPC.Offset;
-            }
-            frameNum++;
-        }
-        while (dbghelp.StackWalk64(imageType, hProcess, hThread, &stackframe,
-                                   &ctxt, null, null, null, null));
-        return result;
-    }
-
     static char[][] resolveNoSync(const(ulong)[] addresses)
     {
         auto dbghelp  = DbgHelp.get();
@@ -276,52 +175,215 @@ private:
         }
         return trace;
     }
+}
 
-    static char[] formatStackFrame(void* pc)
+immutable(size_t)[] createStackTrace(size_t skip, CONTEXT* context) nothrow @nogc
+{
+    if (ctxt is null)
     {
-        import core.stdc.stdio : snprintf;
-        char[2+2*size_t.sizeof+1] buf=void;
-
-        immutable len = snprintf(buf.ptr, buf.length, "0x%p", pc);
-        cast(uint)len < buf.length || assert(0);
-        return buf[0 .. len].dup;
+        static enum INTERNALFRAMES = 3;
+        skip += INTERNALFRAMES; // skip the createStackTrace calls
+    }
+    else
+    {
+        //When a exception context is given the first stack frame is repeated for some reason
+        static enum INTERNALFRAMES = 1;
+        skip += INTERNALFRAMES;
     }
 
-    static char[] formatStackFrame(void* pc, char* symName)
-    {
-        char[2048] demangleBuf=void;
+    typeof(return) res;
+    _sync({res = createStackTraceNoSync(skip, context);});
+    return res;
+}
 
-        auto res = formatStackFrame(pc);
-        res ~= " in ";
-        const(char)[] tempSymName = symName[0 .. strlen(symName)];
-        //Deal with dmd mangling of long names
-        version(DigitalMars) version(Win32)
+immutable(size_t)[] createStackTraceNoSync(size_t skip, CONTEXT* context) nothrow @nogc
+{
+    auto dbghelp = DbgHelp.get();
+    if (dbghelp is null)
+        return null; // dbghelp.dll not available
+
+    if (RtlCaptureStackBackTrace !is null && context is null)
+    {
+        size_t[63] buffer = void; // On windows xp the sum of "frames to skip" and "frames to capture" can't be greater than 63
+        auto backtraceLength = RtlCaptureStackBackTrace(cast(ULONG)skip, cast(ULONG)(buffer.length - skip), cast(void**)buffer.ptr, null);
+
+        // If we get a backtrace and it does not have the maximum length use it.
+        // Otherwise rely on tracing through StackWalk64 which is slower but works when no frame pointers are available.
+        if (backtraceLength > 1 && backtraceLength < buffer.length - skip)
         {
-            size_t decodeIndex = 0;
-            tempSymName = decodeDmdString(tempSymName, decodeIndex);
+            auto res = (cast(size_t*)malloc(backtraceLength * size_t.sizeof))[0 .. backtraceLength];
+            if (res.ptr is null)
+                return null;
+            res[] = buffer[0 .. backtraceLength];
+            return res;
         }
-        res ~= demangle(tempSymName, demangleBuf);
-        return res;
     }
 
-    static char[] formatStackFrame(void* pc, char* symName,
-                                   in char* fileName, uint lineNum)
-    {
-        import core.stdc.stdio : snprintf;
-        char[11] buf=void;
+    enum MAXFRAMES = 128;
+    auto result = (cast(size_t*)malloc(MAXFRAMES * size_t.sizeof))[0 .. MAXFRAMES];
+    if (result.ptr is null)
+        return null;
 
-        auto res = formatStackFrame(pc, symName);
-        res ~= " at ";
-        res ~= fileName[0 .. strlen(fileName)];
-        res ~= "(";
-        immutable len = snprintf(buf.ptr, buf.length, "%u", lineNum);
-        cast(uint)len < buf.length || assert(0);
-        res ~= buf[0 .. len];
-        res ~= ")";
-        return res;
+    HANDLE hThread  = GetCurrentThread();
+    HANDLE hProcess = GetCurrentProcess();
+    CONTEXT ctxt;
+
+    if (context is null)
+    {
+        ctxt.ContextFlags = CONTEXT_FULL;
+        RtlCaptureContext(&ctxt);
+    }
+    else
+    {
+        ctxt = *context;
+    }
+
+    //x86
+    STACKFRAME64 stackframe;
+    with (stackframe)
+    {
+        version(X86)
+        {
+            enum Flat = ADDRESS_MODE.AddrModeFlat;
+            AddrPC.Offset    = ctxt.Eip;
+            AddrPC.Mode      = Flat;
+            AddrFrame.Offset = ctxt.Ebp;
+            AddrFrame.Mode   = Flat;
+            AddrStack.Offset = ctxt.Esp;
+            AddrStack.Mode   = Flat;
+        }
+        else version(X86_64)
+        {
+            enum Flat = ADDRESS_MODE.AddrModeFlat;
+            AddrPC.Offset    = ctxt.Rip;
+            AddrPC.Mode      = Flat;
+            AddrFrame.Offset = ctxt.Rbp;
+            AddrFrame.Mode   = Flat;
+            AddrStack.Offset = ctxt.Rsp;
+            AddrStack.Mode   = Flat;
+        }
+    }
+
+    version (X86) enum imageType = IMAGE_FILE_MACHINE_I386;
+    else version (X86_64) enum imageType = IMAGE_FILE_MACHINE_AMD64;
+    else static assert(0, "unimplemented");
+
+    size_t n;
+    do
+    {
+        if (stackframe.AddrPC.Offset == stackframe.AddrReturn.Offset)
+            // endless callstack
+            break;
+        if (skip)
+            --skip;
+        else
+            result[n++] = stackframe.AddrPC.Offset;
+    } while (dbghelp.StackWalk64(imageType, hProcess, hThread, &stackframe,
+                                 &ctxt, null, null, null, null));
+    return result[0 .. n];
+}
+
+alias PrintDG = void delegate(const(char[])) nothrow @nogc;
+
+void tracePrinter(immutable(size_t)[] callstack,
+    scope PrintDG print) nothrow @nogc
+{
+    _sync({tracePrinterNoSync(callstack, print)});
+}
+
+void tracePrinterNoSync(immutable(size_t)[] callstack,
+    scope PrintDG print) nothrow @nogc
+{
+    auto dbghelp = DbgHelp.get();
+    if (dbghelp is null)
+        return; // dbghelp.dll not available
+
+    HANDLE hProcess = GetCurrentProcess();
+
+    static struct BufSymbol
+    {
+        align(1):
+        IMAGEHLP_SYMBOL64 _base;
+        TCHAR[1024] _buf;
+    }
+    BufSymbol bufSymbol=void;
+    IMAGEHLP_SYMBOL64* symbol = &bufSymbol._base;
+    symbol.SizeOfStruct = IMAGEHLP_SYMBOL64.sizeof;
+    symbol.MaxNameLength = bufSymbol._buf.length;
+
+    char[][] trace;
+    foreach (pc; callstack)
+    {
+        if (pc != 0)
+        {
+            char[] res;
+            if (dbghelp.SymGetSymFromAddr64(hProcess, pc, null, symbol) &&
+                *symbol.Name.ptr)
+            {
+                DWORD disp;
+                IMAGEHLP_LINE64 line=void;
+                line.SizeOfStruct = IMAGEHLP_LINE64.sizeof;
+
+                if (dbghelp.SymGetLineFromAddr64(hProcess, pc, &disp, &line))
+                    formatStackFrame(cast(void*)pc, symbol.Name.ptr,
+                                           line.FileName, line.LineNumber, print);
+                else
+                    formatStackFrame(cast(void*)pc, symbol.Name.ptr, print);
+            }
+            else
+                formatStackFrame(cast(void*)pc, print);
+        }
     }
 }
 
+private:
+
+void formatStackFrame(void* pc, scope PrintDG print)
+{
+    import core.stdc.stdio : snprintf;
+    char[2+2*size_t.sizeof+1] buf=void;
+
+    immutable len = snprintf(buf.ptr, buf.length, "0x%p", pc);
+    cast(uint)len < buf.length || assert(0);
+    print(buf[0 .. len]);
+}
+
+static char[] formatStackFrame(void* pc, char* symName, scope PrintDG print)
+{
+    formatStackFrame(pc, print);
+    print(" in ");
+    const(char)[] tempSymName = symName[0 .. strlen(symName)];
+    //Deal with dmd mangling of long names
+    version(DigitalMars) version(Win32)
+    {
+        size_t decodeIndex = 0;
+        tempSymName = decodeDmdString(tempSymName, decodeIndex);
+    }
+    demangle(tempSymName, print);
+    return res;
+}
+
+static char[] formatStackFrame(void* pc, char* symName,
+                               in char* fileName, uint lineNum, scope PrintDG print)
+{
+    import core.stdc.stdio : snprintf;
+    char[11] buf=void;
+
+    auto res = formatStackFrame(pc, symName, print);
+    print(" at ");
+    print(fileName[0 .. strlen(fileName)]);
+    print("(");
+    immutable len = snprintf(buf.ptr, buf.length, "%u", lineNum);
+    cast(uint)len < buf.length || assert(0);
+    print(buf[0 .. len]);
+    print(")");
+}
+
+void _sync(scope void delegate() nothrow @nogc dg) nothrow @nogc
+{
+    scope (failure) assert(0); // nothrow hack for synchronized
+    synchronized dg();
+}
 
 // Workaround OPTLINK bug (Bugzilla 8263)
 extern(Windows) BOOL FixupDebugHeader(HANDLE hProcess, ULONG ActionCode,
@@ -372,7 +434,6 @@ private string generateSearchPath()
     path ~= "\0";
     return path;
 }
-
 
 shared static this()
 {

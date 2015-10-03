@@ -24,7 +24,6 @@ debug(PRINTF) import core.stdc.stdio : printf;
 
 extern (C)
 {
-    Throwable.TraceInfo _d_traceContext(void* ptr = null);
     int _d_isbaseof(ClassInfo oc, ClassInfo c);
     void _d_createTrace(Object o, void* context);
 }
@@ -89,7 +88,7 @@ private
 
     /// __inflight is per-stack, not per-thread, and as such needs to be
     /// swapped out on fiber context switches.
-    extern(C) void* _d_eh_swapContext(void* newContext) nothrow
+    extern(C) void* _d_eh_swapContext(void* newContext) nothrow @nogc
     {
         auto old = __inflight;
         __inflight = cast(InFlight*)newContext;
@@ -232,8 +231,6 @@ extern (C) void _d_throwc(Object h)
         }
     else
         static assert(0);
-
-    _d_createTrace(h, null);
 
 //static uint abc;
 //if (++abc == 2) *(char *)0=0;
@@ -484,4 +481,3 @@ extern (C) void _d_throwc(Object h)
     }
     terminate();
 }
-

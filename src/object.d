@@ -1531,6 +1531,7 @@ unittest
  */
 class Throwable : Object
 {
+    deprecated("Use core.runtime.Runtime.TracePrinter instead.")
     interface TraceInfo
     {
         int opApply(scope int delegate(ref const(char[]))) const;
@@ -1548,13 +1549,6 @@ class Throwable : Object
     size_t      line;   /// ditto
 
     /**
-     * The stack trace of where the error happened. This is an opaque object
-     * that can either be converted to $(D string), or iterated over with $(D
-     * foreach) to extract the items in the stack trace (as strings).
-     */
-    TraceInfo   info;
-
-    /**
      * A reference to the _next error in the list. This is used when a new
      * $(D Throwable) is thrown from inside a $(D catch) block. The originally
      * caught $(D Exception) will be chained to the new $(D Throwable) via this
@@ -1562,11 +1556,25 @@ class Throwable : Object
      */
     Throwable   next;
 
+    union
+    {
+        /**
+         * The stack trace of where the error happened. This is an opaque object
+         * that can either be converted to $(D string), or iterated over with $(D
+         * foreach) to extract the items in the stack trace (as strings).
+         */
+        deprecated("use .toString instead.")
+        TraceInfo   info;
+        // callstack of the exception
+        private void*[] callstack;
+    }
+
     @nogc @safe pure nothrow this(string msg, Throwable next = null)
     {
         this.msg = msg;
         this.next = next;
-        //this.info = _d_traceContext();
+        import core.runtime : createStackTrace;
+        createStackTrace(this);
     }
 
     @nogc @safe pure nothrow this(string msg, string file, size_t line, Throwable next = null)
@@ -1574,7 +1582,6 @@ class Throwable : Object
         this(msg, next);
         this.file = file;
         this.line = line;
-        //this.info = _d_traceContext();
     }
 
     /**
@@ -1611,19 +1618,23 @@ class Throwable : Object
         {
             sink(": "); sink(msg);
         }
-        if (info)
+        if (callstack.ptr !is null)
         {
-            try
+            import core.runtime;
+            if (auto fp = Runtime.tracePrinter)
+                fp(callstack, sink);
+            else // deprecated TraceInfo support
             {
-                sink("\n----------------");
-                foreach (t; info)
+                try
                 {
-                    sink("\n"); sink(t);
+                    sink("\n----------------");
+                    foreach (t; info)
+                        sink("\n"); sink(t);
                 }
-            }
-            catch (Throwable)
-            {
-                // ignore more errors
+                catch (Throwable)
+                {
+                    // ignore more errors
+                }
             }
         }
     }

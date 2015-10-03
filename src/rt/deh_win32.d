@@ -212,7 +212,6 @@ extern __gshared DWORD _except_list; // This is just FS:[0]
 extern(C)
 {
     int _d_isbaseof(ClassInfo b, ClassInfo c);
-    Throwable.TraceInfo _d_traceContext(void* ptr = null);
     void _d_createTrace(Object o, void* context);
 }
 
@@ -381,7 +380,7 @@ EXCEPTION_RECORD * inflightExceptionList = null;
 /***********************************
  * Switch out inflightExceptionList on fiber context switches.
  */
-extern(C) void* _d_eh_swapContext(void* newContext) nothrow
+extern(C) void* _d_eh_swapContext(void* newContext) nothrow @nogc
 {
     auto old = inflightExceptionList;
     inflightExceptionList = cast(EXCEPTION_RECORD*)newContext;
@@ -996,4 +995,3 @@ void _d_monitor_epilog(void *x, void *y, Object h)
         pop     EAX;
     }
 }
-
