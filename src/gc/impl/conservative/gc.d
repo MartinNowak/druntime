@@ -261,7 +261,11 @@ class ConservativeGC : GC
     static gcLock = shared(AlignedSpinLock)(SpinLock.Contention.lengthy);
     static bool _inFinalizer;
 
-    // lock GC, throw InvalidMemoryOperationError on recursive locking during finalization
+    /*
+     * Lock the GC.
+     *
+     * Throws: InvalidMemoryOperationError on recursive locking during finalization.
+     */
     static void lockNR() @nogc nothrow
     {
         if (_inFinalizer)
@@ -270,6 +274,12 @@ class ConservativeGC : GC
     }
 
 
+    /*
+     * Initialize the GC based on command line configuration.
+     *
+     * Throws:
+     *  OutOfMemoryError if failed to initialize GC due to not enough memory.
+     */
     static void initialize(ref GC gc)
     {
         import core.stdc.string: memcpy;
@@ -335,6 +345,10 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Enables the GC if disable() was previously called. Must be called
+     * for each time disable was called in order to enable the GC again.
+     */
     void enable()
     {
         static void go(Gcx* gcx) nothrow
@@ -346,6 +360,9 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Disable the GC. The GC may still run if it deems necessary.
+     */
     void disable()
     {
         static void go(Gcx* gcx) nothrow
@@ -356,6 +373,13 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Run a function inside a lock/unlock set.
+     *
+     * Params:
+     *  func = The function to run.
+     *  args = The function arguments.
+     */
     auto runLocked(alias func, Args...)(auto ref Args args)
     {
         debug(PROFILE_API) immutable tm = (config.profile > 1 ? currTime.ticks : 0);
@@ -377,6 +401,17 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Run a function in an lock/unlock set that keeps track of
+     * how much time was spend inside this function (in ticks)
+     * and how many times this fuction was called.
+     *
+     * Params:
+     *  func = The function to run.
+     *  time = The variable keeping track of the time (in ticks).
+     *  count = The variable keeping track of how many times this fuction was called.
+     *  args = The function arguments.
+     */
     auto runLocked(alias func, alias time, alias count, Args...)(auto ref Args args)
     {
         debug(PROFILE_API) immutable tm = (config.profile > 1 ? currTime.ticks : 0);
@@ -403,6 +438,17 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Returns a bit field representing all block attributes set for the memory
+     * referenced by p.
+     *
+     * Params:
+     *  p = A pointer to the base of a valid memory block or to null.
+     *
+     * Returns:
+     *  A bit field containing any bits set for the memory block referenced by
+     *  p or zero on error.
+     */
     uint getAttr(void* p) nothrow
     {
         if (!p)
@@ -429,6 +475,20 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Sets the specified bits for the memory references by p.
+     *
+     * If p was not allocated by the GC, points inside a block, or is null, no
+     * action will be taken.
+     *
+     * Params:
+     *  p = A pointer to the base of a valid memory block or to null.
+     *  mask = A bit field containing any bits to set for this memory block.
+     *
+     * Returns:
+     *  The result of a call to getAttr after the specified bits have been
+     *  set.
+     */
     uint setAttr(void* p, uint mask) nothrow
     {
         if (!p)
@@ -456,6 +516,20 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Clears the specified bits for the memory references by p.
+     *
+     * If p was not allocated by the GC, points inside a block, or is null, no
+     * action will be taken.
+     *
+     * Params:
+     *  p = A pointer to the base of a valid memory block or to null.
+     *  mask = A bit field containing any bits to clear for this memory block.
+     *
+     * Returns:
+     *  The result of a call to getAttr after the specified bits have been
+     *  cleared
+     */
     uint clrAttr(void* p, uint mask) nothrow
     {
         if (!p)
@@ -483,6 +557,21 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Requests an aligned block of managed memory from the garbage collector.
+     *
+     * Params:
+     *  size = The desired allocation size in bytes.
+     *  bits = A bitmask of the attributes to set on this block.
+     *  alloc_size = The actuall size allocated in bytes.
+     *  ti = TypeInfo to describe the memory.
+     *
+     * Returns:
+     *  A reference to the allocated memory or null if no memory was requested.
+     *
+     * Throws:
+     *  OutOfMemoryError on allocation failure
+     */
     void *malloc(size_t size, uint bits, const TypeInfo ti) nothrow
     {
         if (!size)
@@ -504,7 +593,7 @@ class ConservativeGC : GC
 
 
     //
-    //
+    // Implementation for malloc and calloc.
     //
     private void *mallocNoSync(size_t size, uint bits, ref size_t alloc_size, const TypeInfo ti = null) nothrow
     {
@@ -552,6 +641,22 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Requests an aligned block of managed memory from the garbage collector,
+     * which is initialized with all bits set to zero.
+     *
+     * Params:
+     *  size = The desired allocation size in bytes.
+     *  bits = A bitmask of the attributes to set on this block.
+     *  alloc_size = The actuall size allocated in bytes.
+     *  ti = TypeInfo to describe the memory.
+     *
+     * Returns:
+     *  A reference to the allocated memory or null if no memory was requested.
+     *
+     * Throws:
+     *  OutOfMemoryError on allocation failure.
+     */
     void *calloc(size_t size, uint bits, const TypeInfo ti) nothrow
     {
         if (!size)
@@ -573,6 +678,27 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Request that the GC reallocate a block of memory, attempting to adjust
+     * the size in place if possible. If size is 0, the memory will be freed.
+     *
+     * If p was not allocated by the GC, points inside a block, or is null, no
+     * action will be taken.
+     *
+     * Params:
+     *  p = A pointer to the root of a valid memory block or to null.
+     *  size = The desired allocation size in bytes.
+     *  bits = A bitmask of the attributes to set on this block.
+     *  alloc_size = The actuall size allocated in bytes.
+     *  ti = TypeInfo to describe the memory.
+     *
+     * Returns:
+     *  A reference to the allocated memory on success or null if size is
+     *  zero.
+     *
+     * Throws:
+     *  OutOfMemoryError on allocation failure.
+     */
     void *realloc(void *p, size_t size, uint bits, const TypeInfo ti) nothrow
     {
         size_t localAllocSize = void;
@@ -589,6 +715,8 @@ class ConservativeGC : GC
     }
 
 
+    //
+    // The implementation of realloc.
     //
     // bits will be set to the resulting bits of the new block
     //
@@ -737,7 +865,7 @@ class ConservativeGC : GC
 
 
     //
-    //
+    // Implementation of extend.
     //
     private size_t extendNoSync(void* p, size_t minsize, size_t maxsize, const TypeInfo ti = null) nothrow
     in
@@ -792,6 +920,16 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Requests that at least size bytes of memory be obtained from the operating
+     * system and marked as free.
+     *
+     * Params:
+     *  size = The desired size in bytes.
+     *
+     * Returns:
+     *  The actual number of bytes reserved or zero on error.
+     */
     size_t reserve(size_t size) nothrow
     {
         if (!size)
@@ -804,7 +942,7 @@ class ConservativeGC : GC
 
 
     //
-    //
+    // Implementation of reserve
     //
     private size_t reserveNoSync(size_t size) nothrow
     {
@@ -815,6 +953,15 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Deallocates the memory referenced by p.
+     *
+     * If p was not allocated by the GC, points inside a block, is null, or
+     * if free is called from a finalizer, no action will be taken.
+     *
+     * Params:
+     *  p = A pointer to the root of a valid memory block or to null.
+     */
     void free(void *p) nothrow
     {
         if (!p || _inFinalizer)
@@ -827,7 +974,7 @@ class ConservativeGC : GC
 
 
     //
-    //
+    // Implementation of free.
     //
     private void freeNoSync(void *p) nothrow
     {
@@ -889,6 +1036,17 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Determine the base address of the block containing p.  If p is not a gc
+     * allocated pointer, return null.
+     *
+     * Params:
+     *  p = A pointer to the root or the interior of a valid memory block or to
+     *      null.
+     *
+     * Returns:
+     *  The base address of the memory block referenced by p or null on error.
+     */
     void* addrOf(void *p) nothrow
     {
         if (!p)
@@ -901,7 +1059,7 @@ class ConservativeGC : GC
 
 
     //
-    //
+    // Implementation of addrOf.
     //
     void* addrOfNoSync(void *p) nothrow
     {
@@ -917,6 +1075,16 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Determine the allocated size of pointer p.  If p is an interior pointer
+     * or not a gc allocated pointer, return 0.
+     *
+     * Params:
+     *  p = A pointer to the root of a valid memory block or to null.
+     *
+     * Returns:
+     *  The size in bytes of the memory block referenced by p or zero on error.
+     */
     size_t sizeOf(void *p) nothrow
     {
         if (!p)
@@ -929,7 +1097,7 @@ class ConservativeGC : GC
 
 
     //
-    //
+    // Implementation of sizeOf.
     //
     private size_t sizeOfNoSync(void *p) nothrow
     {
@@ -963,6 +1131,18 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Determine the base address of the block containing p.  If p is not a gc
+     * allocated pointer, return null.
+     *
+     * Params:
+     *  p = A pointer to the root or the interior of a valid memory block or to
+     *      null.
+     *
+     * Returns:
+     *  Information regarding the memory block referenced by p or BlkInfo.init
+     *  on error.
+     */
     BlkInfo query(void *p) nothrow
     {
         if (!p)
@@ -975,7 +1155,7 @@ class ConservativeGC : GC
     }
 
     //
-    //
+    // Implementation of query
     //
     BlkInfo queryNoSync(void *p) nothrow
     {
@@ -995,10 +1175,14 @@ class ConservativeGC : GC
 
 
     /**
-     * Verify that pointer p:
-     *  1) belongs to this memory pool
-     *  2) points to the start of an allocated piece of memory
-     *  3) is not on a free list
+     * Performs certain checks on a pointer. These checks will cause asserts to
+     * fail unless the following conditions are met:
+     *  1) The poiinter belongs to this memory pool.
+     *  2) The pointer points to the start of an allocated piece of memory.
+     *  3) The pointer is not on a free list.
+     *
+     * Params:
+     *  p = The pointer to be checked.
      */
     void check(void *p) nothrow
     {
@@ -1012,7 +1196,7 @@ class ConservativeGC : GC
 
 
     //
-    //
+    // Implementation of check
     //
     private void checkNoSync(void *p) nothrow
     {
@@ -1052,6 +1236,12 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Add p to list of roots. If p is null, no operation is performed.
+     *
+     * Params:
+     *  p = A pointer into a GC-managed memory block or null.
+     */
     void addRoot(void *p) nothrow @nogc
     {
         if (!p)
@@ -1063,6 +1253,13 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Remove p from list of roots. If p is null or is not a value
+     * previously passed to addRoot() then no operation is performed.
+     *
+     * Params:
+     *  p = A pointer into a GC-managed memory block or null.
+     */
     void removeRoot(void *p) nothrow @nogc
     {
         if (!p)
@@ -1074,12 +1271,23 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Returns an iterator allowing roots to be traversed via a foreach loop.
+     */
     @property RootIterator rootIter() @nogc
     {
         return &gcx.rootsApply;
     }
 
 
+    /**
+     * Add range to scan for roots. If p is null or sz is 0, no operation is performed.
+     *
+     * Params:
+     *  p  = A pointer to a valid memory address or to null.
+     *  sz = The size in bytes of the block to add.
+     *  ti = TypeInfo to describe the memory.
+     */
     void addRange(void *p, size_t sz, const TypeInfo ti = null) nothrow @nogc
     {
         if (!p || !sz)
@@ -1091,6 +1299,14 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Remove range from list of ranges. If p is null or does not represent
+     * a value previously passed to addRange() then no operation is
+     * performed.
+     *
+     * Params:
+     *  p  = A pointer to a valid memory address or to null.
+     */
     void removeRange(void *p) nothrow @nogc
     {
         if (!p)
@@ -1102,12 +1318,21 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Returns an iterator allowing ranges to be traversed via a foreach loop.
+     */
     @property RangeIterator rangeIter() @nogc
     {
         return &gcx.rangesApply;
     }
 
 
+    /**
+     * Run all finalizers in the code segment.
+     *
+     * Params:
+     *  segment = address range of a code segment
+     */
     void runFinalizers(in void[] segment) nothrow
     {
         static void go(Gcx* gcx, in void[] segment) nothrow
@@ -1137,8 +1362,10 @@ class ConservativeGC : GC
 
 
     /**
-     * Do full garbage collection.
-     * Return number of pages free'd.
+     * Begins a full collection, scanning all stack segments for roots.
+     *
+     * Returns:
+     *  The number of pages freed.
      */
     size_t fullCollect() nothrow
     {
@@ -1167,7 +1394,7 @@ class ConservativeGC : GC
 
 
     /**
-     * do full garbage collection ignoring roots
+     * Begins a full collection while ignoring all stack segments for roots.
      */
     void fullCollectNoStack() nothrow
     {
@@ -1181,6 +1408,9 @@ class ConservativeGC : GC
     }
 
 
+    /**
+     * Minimize free space usage.
+     */
     void minimize() nothrow
     {
         static void go(Gcx* gcx) nothrow
@@ -1202,7 +1432,7 @@ class ConservativeGC : GC
 
 
     //
-    //
+    // Implementation of getStats.
     //
     private void getStatsNoSync(out core.memory.GC.Stats stats) nothrow
     {
