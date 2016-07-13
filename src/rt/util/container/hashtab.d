@@ -53,7 +53,6 @@ struct HashTab(Key, Value)
     }
 
     void remove(in Key key)
-    in { assert(key in this); }
     body
     {
         ensureNotInOpApply();
@@ -77,7 +76,6 @@ struct HashTab(Key, Value)
                 pp = &p._next;
             }
         }
-        assert(0);
     }
 
     ref inout(Value) opIndex(Key key) inout
