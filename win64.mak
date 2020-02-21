@@ -26,8 +26,9 @@ DDOCFLAGS=-conf= -c -w -o- -Isrc -Iimport -version=CoreDdoc
 
 UTFLAGS=-version=CoreUnittest -unittest -checkaction=context
 
-#CFLAGS=/O2 /I"$(VCDIR)"\INCLUDE /I"$(SDKDIR)"\Include
-CFLAGS=/Z7 /I"$(VCDIR)"\INCLUDE /I"$(SDKDIR)"\Include
+INCLUDE=/I"$(VCDIR)"\INCLUDE /I"$(SDKDIR)"\Include
+#CFLAGS=/O2 $(INCLUDE)"
+CFLAGS=/Z7 $(INCLUDE)
 
 DRUNTIME_BASE=druntime$(MODEL)
 DRUNTIME=lib\$(DRUNTIME_BASE).lib
