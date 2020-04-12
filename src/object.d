@@ -37,6 +37,7 @@ alias wstring = immutable(wchar)[];
 alias dstring = immutable(dchar)[];
 
 version (D_ObjectiveC) public import core.attribute : selector;
+version (Posix) public import core.attribute : gnuAbiTag;
 
 /**
  * All D class objects inherit from Object.
@@ -1030,8 +1031,8 @@ class TypeInfo_Class : TypeInfo
         return m_offTi;
     }
 
-    @property auto info() @safe nothrow pure const { return this; }
-    @property auto typeinfo() @safe nothrow pure const { return this; }
+    @property auto info() @safe nothrow pure const return { return this; }
+    @property auto typeinfo() @safe nothrow pure const return { return this; }
 
     byte[]      m_init;         /** class static initializer
                                  * (init.length gives size in bytes of class)
@@ -2648,7 +2649,7 @@ private enum bool isSafeCopyable(T) = is(typeof(() @safe { union U { T x; } T *x
  *      update = The callable to apply on update.
  */
 void update(K, V, C, U)(ref V[K] aa, K key, scope C create, scope U update)
-if (is(typeof(create()) : V) && is(typeof(update(aa[K.init])) : V))
+if (is(typeof(create()) : V) && (is(typeof(update(aa[K.init])) : V) || is(typeof(update(aa[K.init])) == void)))
 {
     bool found;
     // if key is @safe-ly copyable, `update` may infer @safe
@@ -2666,7 +2667,12 @@ if (is(typeof(create()) : V) && is(typeof(update(aa[K.init])) : V))
     if (!found)
         *p = create();
     else
-        *p = update(*p);
+    {
+        static if (is(typeof(update(*p)) == void))
+            update(*p);
+        else
+            *p = update(*p);
+    }
 }
 
 ///
@@ -2675,16 +2681,16 @@ if (is(typeof(create()) : V) && is(typeof(update(aa[K.init])) : V))
     auto aa = ["k1": 1];
 
     aa.update("k1", {
-        return -1; // create (won't be executed
+        return -1; // create (won't be executed)
     }, (ref int v) {
-        return v + 1; // update
+        v += 1; // update
     });
     assert(aa["k1"] == 2);
 
     aa.update("k2", {
         return 0; // create
     }, (ref int v) {
-        return -1; // update (won't be executed)
+        v = -1; // update (won't be executed)
     });
     assert(aa["k2"] == 0);
 }
@@ -2751,6 +2757,19 @@ if (is(typeof(create()) : V) && is(typeof(update(aa[K.init])) : V))
     assert(a["2"] == 3);
     a.update("1", S1.init, S1.init);
     assert(a["1"] == -2);
+}
+
+@system unittest
+{
+    int[string] aa;
+
+    foreach (n; 0 .. 2)
+        aa.update("k1", {
+            return 7;
+        }, (ref int v) {
+            return v + 3;
+        });
+    assert(aa["k1"] == 10);
 }
 
 version (CoreDdoc)
